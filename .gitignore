@@ -1,0 +1,6 @@
+*.o
+*.so
+protocol/*.c
+protocol/*.h
+client/mayhem-menu
+
