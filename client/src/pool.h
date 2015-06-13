@@ -1,7 +1,7 @@
 #ifndef POOL_H
 #define POOL_H
 
-#include <wayland-client.h>
+#include <wayland-client-core.h>
 
 struct pool;
 

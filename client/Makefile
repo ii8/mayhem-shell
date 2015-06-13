@@ -1,7 +1,7 @@
 
 include ../config.mk
 
-CFLAGS+=-I/usr/include/cairo -I../protocol -I/usr/include/python3.4m
+CFLAGS+=-I/usr/include/cairo -I../protocol $$(python3-config --cflags)
 LDFLAGS=-lwayland-client -lcairo -lrt -lpython3.4m
 SOURCES=\
 	src/client.c\

@@ -6,7 +6,7 @@
 #include <signal.h>
 
 #include <cairo.h>
-#include <wayland-client.h>
+#include <wayland-client-core.h>
 //#include <wayland-cursor.h>
 #include "mayhem-client.h"
 #include "list.h"
@@ -15,7 +15,7 @@
 
 //#include <sys/types.h>
 
-#define SHM_NAME "/mayhem-shm-XXXXXX"
+#define SHM_NAME "/mayhem-shm"
 
 struct display {
 	struct wl_display *display;
@@ -43,7 +43,7 @@ struct bg {
 	char *file;
 };
 
-static int running = 1;
+static volatile sig_atomic_t running = 1;
 
 static void ms_configure(void *data,
 				   struct ms_menu *ms,
@@ -195,49 +195,58 @@ static struct display *display_create()
 	struct display *display;
 
 	display = malloc(sizeof *display);
-	if(display == NULL) {
-		fprintf(stderr, "out of memory\n");
-		exit(1);
-	}
+	if(display == NULL)
+		return NULL;
+
 	display->display = wl_display_connect(NULL);
 	if(!display->display) {
 		fprintf(stderr, "Could not connect to display");
-		return NULL;
+		goto err_display;
 	}
 
 	display->formats = 0;
 	display->registry = wl_display_get_registry(display->display);
-	wl_registry_add_listener(display->registry, &registry_listener, display);
+	wl_registry_add_listener(display->registry, &registry_listener,
+				 display);
 
 	wl_display_roundtrip(display->display);
-	if(display->shm == NULL) {
-		fprintf(stderr, "No wl_shm global\n");
-		return NULL;
+	if(display->shm == NULL || display->compositor == NULL) {
+		fprintf(stderr, "Missing globals\n");
+		goto err;
 	}
 
 	wl_display_roundtrip(display->display);
 
 	if(!(display->formats & (1 << WL_SHM_FORMAT_ARGB8888))) {
 		fprintf(stderr, "No ARGB32, Compositor sucks!\n");
-		return NULL;
+		goto err;
 	}
 
 	display->pool = pool_create(display->shm, SHM_NAME, 8000);
 	if(display->pool == NULL)
-		return NULL;
+		goto err;
 
 	return display;
+
+err:
+	if(display->shm)
+		wl_shm_destroy(display->shm);
+	if(display->compositor)
+		wl_compositor_destroy(display->compositor);
+	wl_registry_destroy(display->registry);
+	wl_display_flush(display->display);
+	wl_display_disconnect(display->display);
+err_display:
+	free(display);
+	return NULL;
 }
 
 static void display_destroy(struct display *display)
 {
 	pool_destroy(display->pool);
 
-	if(display->shm)
-		wl_shm_destroy(display->shm);
-
-	if(display->compositor)
-		wl_compositor_destroy(display->compositor);
+	wl_shm_destroy(display->shm);
+	wl_compositor_destroy(display->compositor);
 
 	wl_registry_destroy(display->registry);
 	wl_display_flush(display->display);
@@ -292,7 +301,7 @@ static void bg_draw(struct bg* bg)
 	wl_surface_commit(bg->wsurf);
 }
 
-static void signal_int(int signum)
+static void handle_sigint(int signum)
 {
 	running = 0;
 }
@@ -306,9 +315,9 @@ int main(int argc, char **argv)
 
 	display = display_create();
 	if(!display)
-		return 1;
+		return EXIT_FAILURE;
 
-	sigint.sa_handler = signal_int;
+	sigint.sa_handler = handle_sigint;
 	sigemptyset(&sigint.sa_mask);
 	sigint.sa_flags = SA_RESETHAND;
 	sigaction(SIGINT, &sigint, NULL);
@@ -326,6 +335,6 @@ int main(int argc, char **argv)
 		bg_destroy(bg);
 	display_destroy(display);
 
-	return 0;
+	return EXIT_SUCCESS;
 }
 

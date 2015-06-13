@@ -7,7 +7,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
-#include <wayland-client.h>
+#include <wayland-client-core.h>
+#include <wayland-client-protocol.h>
 
 #include "pool.h"
 
@@ -143,16 +144,29 @@ skip:
 
 struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 {
-	struct pool* pool;
+	static unsigned seed = 0;
+	struct pool *pool;
 	int max = 100;
+	int len;
 
 	pool = malloc(sizeof *pool);
+	if(pool == NULL)
+		return NULL;
+
+	srand(++seed);
+	len = strlen(name);
+	pool->name = malloc(len + 8);
+	if(pool->name == NULL) {
+		free(pool);
+		return NULL;
+	}
+	strcpy(pool->name, name);
 
 	/* Create file */
 	do {
-		//TODO: make name unique
-		//name[strlen(name)-2]++;
-		pool->fd = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+		errno = 0;
+		sprintf(pool->name + len, "-%i", rand() % 1000000);
+		pool->fd = shm_open(pool->name, O_RDWR | O_CREAT | O_EXCL, 0600);
 	} while(errno == EEXIST && max--);
 
 	if(pool->fd < 0) {
@@ -166,7 +180,6 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 	if(initial_size % pagesize)
 		initial_size += pagesize - initial_size % pagesize;
 	pool->size = initial_size;
-	pool->name = name;
 	ftruncate(pool->fd, pool->size);
 	pool->shm_pool = wl_shm_create_pool(shm, pool->fd, pool->size);
 	wl_list_init(&pool->buffers);
@@ -176,9 +189,23 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 
 void pool_destroy(struct pool* pool)
 {
+	struct buffer *segment, *tmp;
+
+	wl_list_for_each_safe(segment, tmp, &pool->buffers, link) {
+		if(segment->flags & BUFFER_ACTIVE)
+			buffer_destroy(segment);
+	}
+
+	assert(pool->buffers.next == pool->buffers.prev);
+	assert(pool->buffers.next->prev == &pool->buffers);
+
+	segment = wl_container_of(pool->buffers.next, segment, link);
+	free(segment);
+
 	wl_shm_pool_destroy(pool->shm_pool);
 	shm_unlink(pool->name);
 	close(pool->fd);
+	free(pool->name);
 	free(pool);
 }
 

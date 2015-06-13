@@ -26,6 +26,7 @@ struct frame {
 };
 
 struct menu {
+	int closed;
 	struct pool *pool;
 	struct wl_compositor *ec;
 	struct ms_menu *ms;
@@ -147,30 +148,17 @@ struct item_text *item_text_create(struct frame *parent, const char* text)
 	item->base.height = 100;
 	item->text = text;
 
+	parent->width = 200;
+	parent->height = 100;
+
 	return item;
 }
-
-/*
-static struct buffer *frame_next_buffer(struct frame *frame)
-{
-	struct buffer *buffer;
-
-	if (!frame->buffers[0]->busy)
-		buffer = frame->buffers[0];
-	else if (!frame->buffers[1]->busy)
-		buffer = frame->buffers[1];
-	else
-		return NULL;
-
-	return buffer;
-}*/
 
 static const struct wl_callback_listener frame_listener;
 
 static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 {
 	struct frame *frame = data;
-	//struct buffer *buffer;
 
 	if(frame->dirty)
 	{
@@ -195,12 +183,11 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 			void *addr = frame->buffers[buffer]->addr + item->offset;
 			item->draw_func(item, addr, frame->width);
 		}
-		//paint_pixels(buffer->addr, 20, menu->width, menu->height, time);
 
 		wl_surface_attach(frame->surface, frame->buffers[buffer]->buffer, 0, 0);
 		wl_surface_damage(frame->surface, 0, 0, frame->width, frame->height);
 		wl_surface_commit(frame->surface);
-		frame->buffers[buffer]->flags &= BUFFER_BUSY;
+		frame->buffers[buffer]->flags |= BUFFER_BUSY;
 		frame->dirty = 0;
 	}
 
@@ -217,10 +204,10 @@ static const struct wl_callback_listener frame_listener = {
 
 static void frame_destroy(struct frame *frame)
 {
-	struct frame *child;
+	struct frame *child, *tmp;
 
-	wl_list_for_each(child, &frame->children, link) {
-		printf("descending into child\n");
+	wl_list_for_each_safe(child, tmp, &frame->children, link) {
+		printf("descending more\n");
 		frame_destroy(child);
 	}
 
@@ -233,6 +220,8 @@ static void frame_destroy(struct frame *frame)
 
 	ms_surface_destroy(frame->msurf);
 	wl_surface_destroy(frame->surface);
+
+	wl_list_remove(&frame->link);
 	free(frame);
 }
 
@@ -259,7 +248,6 @@ static struct frame *frame_create(struct menu *menu, struct frame *parent)
 	return frame;
 }
 
-/* Python API */
 struct py_menu {
 	PyObject_HEAD
 	struct frame *frame;
@@ -300,23 +288,15 @@ static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 	struct item_text *item;
 	char *str = NULL;
 
-	printf("lol1");
-	
 	if(!PyArg_ParseTuple(args, "s", &str))
 		return NULL;
-
-	printf("lol2");
 
 	item = item_text_create(frame, str?:"");
 	if(!item)
 		return PyErr_NoMemory();
 
-	printf("lol3");
-
 	py_item = PyObject_New(struct py_item, &py_item_text_type);
 	py_item->item = (struct item*)item;
-
-	printf("lol4");
 
 	return (PyObject*)py_item;
 }
@@ -337,48 +317,24 @@ static PyMethodDef api_menu[] = {
 
 static PyTypeObject py_menu_type = {
 	PyVarObject_HEAD_INIT(NULL, 0)
-	PYMOD_NAME ".menu",	/* tp_name */
-	sizeof(struct py_menu),	/* tp_basicsize */
-	0,			/* tp_itemsize */
-	0,			/* tp_dealloc */
-	0,			/* tp_print */
-	0,			/* tp_getattr */
-	0,			/* tp_setattr */
-	0,			/* tp_as_async */
-	0,			/* tp_repr */
-	0,			/* tp_as_number */
-	0,			/* tp_as_sequence */
-	0,			/* tp_as_mapping */
-	0,			/* tp_hash  */
-	0,			/* tp_call */
-	0,			/* tp_str */
-	0,			/* tp_getattro */
-	0,			/* tp_setattro */
-	0,			/* tp_as_buffer */
-	Py_TPFLAGS_DEFAULT,	/* tp_flags */
-	"Menu object",		/* tp_doc */
-	0,			/* tp_traverse */
-	0,			/* tp_clear */
-	0,			/* tp_richcompare */
-	0,			/* tp_weaklistoffset */
-	0,			/* tp_iter */
-	0,			/* tp_iternext */
-	api_menu,		/* tp_methods */
-	0,			/* tp_members */
-	0,			/* tp_getset */
-	0,			/* tp_base */
-	0,			/* tp_dict */
-	0,			/* tp_descr_get */
-	0,			/* tp_descr_set */
-	0,			/* tp_dictoffset */
-	0,			/* tp_init */
-	0,			/* tp_alloc */
-	0,			/* tp_new */
+	.tp_name = PYMOD_NAME ".menu",
+	.tp_basicsize = sizeof(struct py_menu),
+	.tp_flags = Py_TPFLAGS_DEFAULT,
+	.tp_doc = "Menu Object",
+	.tp_methods = api_menu
 };
 
 static PyObject *api_base_close(PyObject *self, PyObject *args)
 {
-	menu_destroy(menu_global);
+	struct frame *child, *tmp;
+	(void)self;
+	(void)args;
+
+	wl_list_for_each_safe(child, tmp, &menu_global->top_frames, link) {
+		printf("descending into child\n");
+		frame_destroy(child);
+	}
+
 	Py_RETURN_NONE;
 }
 
@@ -387,6 +343,8 @@ static PyObject *api_base_spawn(PyObject *self, PyObject *args)
 	struct py_menu *py_frame;
 	struct frame *frame;
 	int w, h;
+
+	(void)self;
 
 	if(!PyArg_ParseTuple(args, "ii", &w, &h))
 		return NULL;
@@ -420,11 +378,27 @@ static PyModuleDef python_module = {
 	NULL /* destroy function */
 };
 
-static PyObject *module_init()
+PyMODINIT_FUNC module_init(void)
 {
-	return PyModule_Create(&python_module);
+	PyObject* module;
+
+	py_menu_type.tp_new = PyType_GenericNew;
+	if(PyType_Ready(&py_menu_type) < 0)
+		return NULL;
+
+	py_item_text_type.tp_new = PyType_GenericNew;
+	if(PyType_Ready(&py_item_text_type) < 0)
+		return NULL;
+
+	module = PyModule_Create(&python_module);
+	if(module == NULL)
+		return NULL;
+
+    	Py_INCREF(&py_menu_type);
+    	Py_INCREF(&py_item_text_type);
+
+	return module;
 }
-/* End API */
 
 struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 			 struct pool *pool)
@@ -435,7 +409,9 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	if(menu_global)
 		return NULL;
 
-	PyImport_AppendInittab(PYMOD_NAME, &module_init);
+	if(PyImport_AppendInittab(PYMOD_NAME, &module_init) < 0)
+		return NULL;
+
 	Py_Initialize();
 
 	pySysPath = PySys_GetObject("path");
@@ -456,35 +432,18 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	if(!menu)
 		goto err1;
 
+	menu->closed = 0;
 	menu->ec = ec;
 	menu->ms = ms;
 	menu->pool = pool;
 	wl_list_init(&menu->top_frames);
 	menu_global = menu;
 
-	//TODO replace these with safe new()
-	py_menu_type.tp_new = PyType_GenericNew;
-	if(PyType_Ready(&py_menu_type) < 0) {
-		printf("fail creating pymenu type");
-		goto err2;
-	}
-	//PyModule_AddObject(pyModule, "menu", (PyObject *)&py_menu_type);
-
 	pyMain = PyObject_GetAttrString(pyModule, "main");
 	Py_DECREF(pyModule);
 	if(pyMain && PyCallable_Check(pyMain)) {
-		/*PyObject *constructor = PyObject_GetAttrString(pyModule, "dave");
-		PyObject *pyManager = PyObject_CallFunction(constructor, "");
-		Py_DECREF(constructor);
-		((PyManagerObject*)pyManager)->menu = menu;
-		PyObject *pyArgs = PyTuple_New(1);
-		if(PyTuple_SetItem(pyArgs, 0, pyManager)) {
-			printf("lol: %x, %x", pyArgs, pyManager);
-			goto err2;
-		}*/
 		PyObject *pyRet = PyObject_CallObject(pyMain, NULL);
 		Py_DECREF(pyMain);
-		//Py_DECREF(pyArgs);
 		if(pyRet == NULL) {
 			PyErr_Print();
 			goto err2;
@@ -509,10 +468,10 @@ err1:
 
 void menu_destroy(struct menu *menu)
 {
-	struct frame *child;
+	struct frame *child, *tmp;
 
 	assert(menu = menu_global);
-	wl_list_for_each(child, &menu->top_frames, link) {
+	wl_list_for_each_safe(child, tmp, &menu->top_frames, link) {
 		printf("descending into child\n");
 		frame_destroy(child);
 	}
