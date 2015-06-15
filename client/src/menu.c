@@ -1,7 +1,7 @@
 
-
-#include <wayland-util.h>
 #include <Python.h>
+#include <wayland-util.h>
+#include <cairo.h>
 
 #include "mayhem-client.h"
 
@@ -14,7 +14,8 @@ static struct menu *menu_global;
 
 struct frame {
 	struct wl_list link;
-	int width, height;
+	int const width;
+	int height;
 	struct wl_surface *surface;
 	struct ms_surface *msurf;
 	struct buffer *buffers[2];
@@ -35,34 +36,61 @@ struct menu {
 
 enum item_type {
 	ITEM_NONE,
-	ITEM_TEXT
+	ITEM_TEXT,
+	ITEM_BAR
+};
+
+enum item_align {
+	ITEM_ALIGN_LEFT = 0x01,
+	ITEM_ALIGN_RIGHT = 0x02,
+	ITEM_ALIGN_TOP = 0x04,
+	ITEM_ALIGN_BOT = 0x08
 };
 
 struct item {
 	struct wl_list link;
 	enum item_type type;
-	void (*draw_func)(struct item*, void*, int);
-	int offset;
+	void (*draw_func)(struct item *, cairo_t *, int);
 	int height;
 };
 
 struct item_text {
 	struct item base;
-	const char *text;
-	uint32_t fg_color;
-	uint32_t bg_color;
+	int width;
+	char *text, *font;
+	uint32_t color;
+	int size;
 };
 
-void item_text_draw(struct item *item, void *addr, int width)
-{
-	int x, y;
-	uint32_t *pixel = addr;
+struct item_bar {
+	struct item base;
+	uint32_t color;
+	int padding[4]; /* top, right, bot, left */
+	enum item_align align;
+	double fill;
+	enum item_bar_style {
+		ITEM_BAR_STYLE_DOTTED = 0x01,
+		ITEM_BAR_STYLE_ROUND = 0x02
+	} style;
+};
 
-	for(y = 0; y < item->height; y++) {
-		for(x =0; x < width; x++) {
-			*pixel++ = 0x80FF3300;
-		}
-	}
+void item_text_draw(struct item *item, cairo_t *cr, int width)
+{
+	struct item_text *text = (struct item_text *) item;
+
+
+	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+	cairo_set_font_size(cr, 24);
+
+	//cairo_show_text(cr, text->text);
+	cairo_text_path(cr, text->text);
+	cairo_stroke(cr);
+}
+
+void item_bar_draw(struct item *item, cairo_t *cr, int width)
+{
+	struct item_bar *bar = (struct item_bar *)item;
+
 }
 
 struct py_item {
@@ -131,27 +159,59 @@ struct item_text *item_text_create(struct frame *parent, const char* text)
 	if(!item)
 		return NULL;
 
-	parent->need_resize = 1;
 	item->base.type = ITEM_TEXT;
 	item->base.draw_func = item_text_draw;
 	if(wl_list_empty(&parent->items)) {
 		wl_list_insert(parent->items.prev, &item->base.link);
-		item->base.offset = 0;
+		//item->base.offset = 0;
 	} else {
 		struct item *prev;
 
 		wl_list_insert(parent->items.prev, &item->base.link);
 		prev = wl_container_of(item->base.link.prev, prev, link);
-		item->base.offset = prev->offset + prev->height * parent->width * 4;
+		//item->base.offset = prev->offset + prev->height * parent->width * 4;
 	}
 	//TODO
+	item->base.width = 100;
 	item->base.height = 100;
 	item->text = text;
 
-	parent->width = 200;
-	parent->height = 100;
+	parent->need_resize = 1;
+	parent->height += item->base.height;
 
 	return item;
+}
+
+static PyMethodDef api_item_text[] = {
+	{"set_text", api_item_text_set_text, METH_VARARGS, "Set text"},
+	{NULL, NULL, 0, NULL}
+};
+
+static PyTypeObject py_item_text_type = {
+	PyVarObject_HEAD_INIT(NULL, 0)
+	.tp_name = PYMOD_NAME ".text",
+	.tp_basicsize = sizeof(struct py_item),
+	.tp_flags = Py_TPFLAGS_DEFAULT,
+	.tp_doc = "Text item",
+	.tp_methods = api_item_text
+};
+
+struct item_bar *item_bar_create(struct frame *frame)
+{
+	struct item_bar * item;
+
+	item = calloc(1, sizeof(struct item_bar));
+	if(!item)
+		return NULL;
+
+	wl_list_insert(parent->items.prev, &item->base.link);
+	item->base.type = ITEM_BAR;
+	item->base.draw_func = item_bar_draw;
+	item->base.height = height;
+
+	item->color = color;
+	item->padding = padding;
+	item->align
 }
 
 static const struct wl_callback_listener frame_listener;
@@ -159,38 +219,68 @@ static const struct wl_callback_listener frame_listener;
 static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 {
 	struct frame *frame = data;
+	struct item *item;
+	struct buffer *buffer;
+	cairo_surface_t *surface;
+	cairo_t *cr;
+	int i = 0;
+	unsigned int stride;
 
-	if(frame->dirty)
-	{
-		struct item *item;
-		int buffer = 0;
+	assert(menu_global);
 
-		if(frame->buffers[buffer]->flags & BUFFER_BUSY)
-			if(frame->buffers[++buffer]->flags & BUFFER_BUSY)
-				assert(0);
-		assert(frame->buffers[buffer]->flags & BUFFER_ACTIVE);
+	if(!frame->dirty)
+		goto end;
 
-		if(frame->need_resize--) {
-			assert(menu_global);
-			buffer_destroy(frame->buffers[buffer]);
-			frame->buffers[buffer] =
-				buffer_create(menu_global->pool, frame->width,
-					      frame->height,
-					      WL_SHM_FORMAT_ARGB8888);
-		}
 
-		wl_list_for_each(item, &frame->items, link) {
-			void *addr = frame->buffers[buffer]->addr + item->offset;
-			item->draw_func(item, addr, frame->width);
-		}
+	if(frame->buffers[i]->flags & BUFFER_BUSY)
+		if(frame->buffers[++i]->flags & BUFFER_BUSY)
+			assert(0);
+	buffer = frame->buffers[i];
+	assert(buffer->flags & BUFFER_ACTIVE);
 
-		wl_surface_attach(frame->surface, frame->buffers[buffer]->buffer, 0, 0);
-		wl_surface_damage(frame->surface, 0, 0, frame->width, frame->height);
-		wl_surface_commit(frame->surface);
-		frame->buffers[buffer]->flags |= BUFFER_BUSY;
-		frame->dirty = 0;
+	if(frame->need_resize--) {
+		buffer_destroy(buffer);
+		buffer = buffer_create(menu_global->pool,
+				       frame->width,
+				       frame->height,
+				       WL_SHM_FORMAT_ARGB8888);
+		frame->buffers[i] = buffer;
 	}
 
+	stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32,
+					       frame->width);
+	assert(stride == sizeof(uint32_t) * frame->width);
+	surface = cairo_image_surface_create_for_data(buffer->addr,
+						      CAIRO_FORMAT_ARGB32,
+						      frame->width,
+						      frame->height,
+						      stride);
+	cr = cairo_create(surface);
+	cairo_surface_destroy(surface);
+
+	cairo_set_source_rgba(cr, 1, 1, 0, 0.80);
+	//cairo_paint(cr);
+	cairo_move_to(cr, 0, 50);
+
+	wl_list_for_each(item, &frame->items, link) {
+		cairo_save(cr);
+		item->draw_func(item, cr, frame->width);
+		cairo_restore(cr);
+		cairo_rel_move_to(cr, 0, item->height);
+	}
+
+	if(cairo_status(cr) != CAIRO_STATUS_SUCCESS)
+		printf("%s\n", cairo_status_to_string(cairo_status(cr)));
+
+	cairo_destroy(cr);
+
+	wl_surface_attach(frame->surface, buffer->buffer, 0, 0);
+	wl_surface_damage(frame->surface, 0, 0, frame->width, frame->height);
+	wl_surface_commit(frame->surface);
+	buffer->flags |= BUFFER_BUSY;
+	frame->dirty = 0;
+
+end:
 	if(callback)
 		wl_callback_destroy(callback);
 
@@ -301,6 +391,26 @@ static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 	return (PyObject*)py_item;
 }
 
+static PyObject *api_menu_add_bar(PyObject *self, PyObject *args, PyObject *kw)
+{
+	static char const keywords[] = {
+		"color", "padding", "padding_top", "padding_right",
+		"padding_bottom", "padding_left", "dotted", "round",
+		"red", "green", "blue", "alpha", NULL
+	};
+	char *color_hex;
+	uint32_t color;
+	int padding_all;
+	int padding[4];
+	int dotted, round;
+	double fill;
+
+	PyArg_ParseTupleAndKeywords(args, kw, "s|IIIIIppd", &keywords, &color_hex
+				    &padding_all, &padding[0], &padding[1],
+				    &padding[2], &padding[3], &dotted, &round,
+				    &fill, );
+}
+
 static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
 {
 	struct py_menu *this = (struct py_menu*)self;
@@ -311,6 +421,7 @@ static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
 static PyMethodDef api_menu[] = {
 	{"show", api_menu_show, METH_VARARGS, "Show the menu"},
 	{"add_text", api_menu_add_text, METH_VARARGS, "Add a text item"},
+	("add_bar", api_menu_add_bar, METH_VARARGS | METH_KEYWORDS, "Add a bar"},
 	{"on_enter", api_menu_on_enter, METH_VARARGS, "Mouse enter callback"},
 	{NULL, NULL, 0, NULL}
 };

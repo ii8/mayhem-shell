@@ -6,7 +6,6 @@ LDFLAGS=-lwayland-client -lcairo -lrt -lpython3.4m
 SOURCES=\
 	src/client.c\
 	src/menu.c\
-	src/list.c\
 	src/pool.c\
 	../protocol/xdg-shell.c\
 	../protocol/mayhem.c

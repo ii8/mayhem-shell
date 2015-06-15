@@ -42,6 +42,7 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 
 	stride = width * 4;
 	size = stride * height;
+	//Maybe have to use a seperate cairo_stride here.
 	if(size % pagesize)
 		size += pagesize - size % pagesize;
 

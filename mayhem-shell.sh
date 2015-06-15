@@ -1,3 +1,3 @@
 #!/bin/sh
-weston-launch -- --config=mayhem-shell.ini
+weston --config=mayhem-shell.ini
 
