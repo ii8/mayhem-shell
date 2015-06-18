@@ -7,6 +7,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+
+#include <cairo.h>
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 
@@ -40,9 +42,8 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 	struct buffer *buffer, *segment;
 	int stride, size;
 
-	stride = width * 4;
+	stride = cairo_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	size = stride * height;
-	//Maybe have to use a seperate cairo_stride here.
 	if(size % pagesize)
 		size += pagesize - size % pagesize;
 

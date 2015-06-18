@@ -78,19 +78,11 @@ static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
 static void ms_despawn(void* data, struct ms_menu *ms_menu)
 {
 	struct display *d = data;
-	struct menu *menu = d->root_menu;
 
-	if(menu == NULL)
+	if(d->root_menu == NULL)
 		return;
 
 	menu_destroy(d->root_menu);
-/*
-	do {
-		menu = list_prev(menu);
-		menu_destroy(list_next(menu));
-	} while(menu != d->root_menu);
-*/
-
 	d->root_menu = NULL;
 }
 
@@ -236,6 +228,7 @@ err:
 	wl_registry_destroy(display->registry);
 	wl_display_flush(display->display);
 	wl_display_disconnect(display->display);
+
 err_display:
 	free(display);
 	return NULL;
@@ -264,7 +257,8 @@ static struct bg *bg_create(struct display *d, int width, int height)
 		return NULL;
 	bg->width = width;
 	bg->height = height;
-	bg->buffer = buffer_create(d->pool, width, height, WL_SHM_FORMAT_XRGB8888);
+	bg->buffer = buffer_create(d->pool, width, height,
+				   WL_SHM_FORMAT_XRGB8888);
 	bg->wsurf = wl_compositor_create_surface(d->compositor);
 	bg->file = "/home/murray/.bg/Anime/default.png";
 
@@ -306,7 +300,7 @@ static void handle_sigint(int signum)
 	running = 0;
 }
 
-int main(int argc, char **argv)
+int main(int argc, char *argv[])
 {
 	struct sigaction sigint;
 	struct display *display;
@@ -333,6 +327,10 @@ int main(int argc, char **argv)
 
 	if(bg)
 		bg_destroy(bg);
+
+	if(display->root_menu)
+		menu_destroy(root_menu);
+
 	display_destroy(display);
 
 	return EXIT_SUCCESS;
