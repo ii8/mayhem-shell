@@ -19,13 +19,10 @@ static PyObject *api_item_text_set_text(PyObject *self, PyObject *args)
 
 	printf("called set_text\n");
 
-	if(this->item->type != ITEM_TEXT)
-		return NULL;
-
 	if(!PyArg_ParseTuple(args, "s", str))
 		return NULL;
 
-	((struct item_text*)this->item)->text = str;
+	item_text_set_text((struct item_text*)this->item, str);
 	Py_RETURN_TRUE;
 }
 
@@ -99,24 +96,22 @@ static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 	return (PyObject*)py_item;
 }
 
-static PyObject *api_menu_add_bar(PyObject *self, PyObject *args, PyObject *kw)
+static PyObject *api_menu_add_bar(PyObject *self, PyObject *args)
 {
-	static char const keywords[] = {
-		"color", "padding", "padding_top", "padding_right",
-		"padding_bottom", "padding_left", "dotted", "round",
-		"red", "green", "blue", "alpha", NULL
-	};
-	char *color_hex;
-	uint32_t color;
-	int padding_all;
-	int padding[4];
-	int dotted, round;
-	double fill;
+	struct py_menu *this = (struct py_menu*)self;
+	PyDictObject *py_theme = NULL;
+	struct theme *theme;
+	int height;
 
-	PyArg_ParseTupleAndKeywords(args, kw, "s|IIIIIppd", &keywords, &color_hex
-				    &padding_all, &padding[0], &padding[1],
-				    &padding[2], &padding[3], &dotted, &round,
-				    &fill, );
+	if(theme == NULL)
+		return PyErr_NoMemory();
+
+	if(!PyArg_ParseTuple(args, "i|O!", &height, &PyDict_Type, &py_theme))
+		return NULL;
+
+	if(py_theme) {
+		theme = frame_get_theme(this->frame);
+	}
 }
 
 static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
@@ -129,7 +124,7 @@ static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
 static PyMethodDef api_menu[] = {
 	{"show", api_menu_show, METH_VARARGS, "Show the menu"},
 	{"add_text", api_menu_add_text, METH_VARARGS, "Add a text item"},
-	("add_bar", api_menu_add_bar, METH_VARARGS | METH_KEYWORDS, "Add a bar"},
+	("add_bar", api_menu_add_bar, METH_VARARGS, "Add a bar"},
 	{"on_enter", api_menu_on_enter, METH_VARARGS, "Mouse enter callback"},
 	{NULL, NULL, 0, NULL}
 };
@@ -221,12 +216,12 @@ int api_init(struct menu *menu)
 	PyObject *pyFile, *pySysPath, *pyPath, *pyModule, *pyMain;
 
 	if(menu_global)
-		return NULL;
+		assert(0);
 
 	menu_global = menu;
 
 	if(PyImport_AppendInittab(MODULE_NAME, &module_init) < 0)
-		return NULL;
+		return -1;
 
 	Py_Initialize();
 

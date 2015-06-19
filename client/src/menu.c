@@ -7,6 +7,13 @@
 #include "pool.h"
 #include "menu.h"
 
+enum item_align {
+	ITEM_ALIGN_LEFT = 0x01,
+	ITEM_ALIGN_RIGHT = 0x02,
+	ITEM_ALIGN_TOP = 0x04,
+	ITEM_ALIGN_BOT = 0x08
+};
+
 struct frame {
 	struct wl_list link;
 	int const width;
@@ -18,6 +25,7 @@ struct frame {
 	int dirty, need_resize;
 	struct menu *menu;
 	struct frame *parent; /* NULL if first */
+	struct theme *theme;
 	struct wl_list children;
 	struct wl_list items;
 };
@@ -27,6 +35,7 @@ struct menu {
 	struct pool *pool;
 	struct wl_compositor *ec;
 	struct ms_menu *ms;
+	struct theme *theme;
 	struct wl_list top_frames;
 };
 
@@ -36,13 +45,6 @@ enum item_type {
 	ITEM_BAR
 };
 
-enum item_align {
-	ITEM_ALIGN_LEFT = 0x01,
-	ITEM_ALIGN_RIGHT = 0x02,
-	ITEM_ALIGN_TOP = 0x04,
-	ITEM_ALIGN_BOT = 0x08
-};
-
 struct item {
 	struct wl_list link;
 	enum item_type type;
@@ -50,25 +52,39 @@ struct item {
 	int height;
 };
 
-struct item_text {
-	struct item base;
-	int width;
-	char *text, *font;
-	uint32_t color;
-	int size;
+static const struct theme default_theme = {
+	.color_fg = 0xFF4791FF,
+	.color_from = 0xFF363636,
+	.color_to = 0xFF363636,
+	.font_family = "serif",
+	.font_slant = CAIRO_FONT_SLANT_NORMAL,
+	.font_weight = CAIRO_FONT_WEIGHT_NORMAL,
+	.padding = { 0, 0, 0, 0 },
+	.align = ITEM_ALIGN_LEFT,
+	.radius = 0
 };
 
-struct item_bar {
-	struct item base;
-	uint32_t color;
-	int padding[4]; /* top, right, bot, left */
-	enum item_align align;
-	double fill;
-	enum item_bar_style {
-		ITEM_BAR_STYLE_DOTTED = 0x01,
-		ITEM_BAR_STYLE_ROUND = 0x02
-	} style;
-};
+/*
+struct item *item_create(struct frame *parent, enum item_type type)
+{
+	struct item *item;
+
+	switch(type) {
+		case ITEM_NONE:
+			item = calloc(1, sizeof(struct item));
+			break;
+		case ITEM_TEXT:
+			item = calloc(1, sizeof(struct item_text));
+			break;
+	}
+	if(!item)
+		return NULL;
+	item->type = type;
+	wl_list_insert(&parent->items, item->link);
+
+	return item;
+}
+*/
 
 static const struct wl_callback_listener frame_listener;
 
@@ -103,7 +119,6 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 
 	stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32,
 					       frame->width);
-	assert(stride == sizeof(uint32_t) * frame->width);
 	surface = cairo_image_surface_create_for_data(buffer->addr,
 						      CAIRO_FORMAT_ARGB32,
 						      frame->width,
@@ -146,12 +161,21 @@ static const struct wl_callback_listener frame_listener = {
 	redraw
 };
 
+/* Text item */
+struct item_text {
+	struct item base;
+	int width;
+	char *text, *font;
+	uint32_t color;
+	int size;
+};
+
 static void item_text_draw(struct item *item, cairo_t *cr, int width)
 {
 	struct item_text *text = (struct item_text *) item;
 
-
-	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL,
+			       CAIRO_FONT_WEIGHT_BOLD);
 	cairo_set_font_size(cr, 24);
 
 	//cairo_show_text(cr, text->text);
@@ -159,34 +183,10 @@ static void item_text_draw(struct item *item, cairo_t *cr, int width)
 	cairo_stroke(cr);
 }
 
-static void item_bar_draw(struct item *item, cairo_t *cr, int width)
+static void item_text_set_text(struct item_text *item, const char *text)
 {
-	struct item_bar *bar = (struct item_bar *)item;
-
+	item->text = text;
 }
-
-
-/*
-struct item *item_create(struct frame *parent, enum item_type type)
-{
-	struct item *item;
-
-	switch(type) {
-		case ITEM_NONE:
-			item = calloc(1, sizeof(struct item));
-			break;
-		case ITEM_TEXT:
-			item = calloc(1, sizeof(struct item_text));
-			break;
-	}
-	if(!item)
-		return NULL;
-	item->type = type;
-	wl_list_insert(&parent->items, item->link);
-
-	return item;
-}
-*/
 
 struct item_text *item_text_create(struct frame *parent, const char* text)
 {
@@ -219,7 +219,26 @@ struct item_text *item_text_create(struct frame *parent, const char* text)
 	return item;
 }
 
-struct item_bar *item_bar_create(struct frame *frame)
+/* Bar item */
+struct item_bar {
+	struct item base;
+	uint32_t color;
+	int padding[4]; /* top, right, bot, left */
+	enum item_align align;
+	double fill;
+	enum item_bar_style {
+		ITEM_BAR_STYLE_DOTTED = 0x01,
+		ITEM_BAR_STYLE_ROUND = 0x02
+	} style;
+};
+
+static void item_bar_draw(struct item *item, cairo_t *cr, int width)
+{
+	struct item_bar *bar = (struct item_bar *)item;
+
+}
+
+struct item_bar *item_bar_create(struct frame *frame, struct theme *theme)
 {
 	struct item_bar * item;
 
@@ -237,7 +256,6 @@ struct item_bar *item_bar_create(struct frame *frame)
 	item->align
 }
 
-
 int frame_show(struct frame *frame)
 {
 	if(frame->callback || !frame->width || !frame->height)
@@ -246,7 +264,6 @@ int frame_show(struct frame *frame)
 	frame->buffers[0] = buffer_create(frame->menu->pool,
 					  frame->width, frame->height,
 					  WL_SHM_FORMAT_ARGB8888);
-
 	if(!frame->buffers[0])
 		return -2;
 
@@ -263,6 +280,18 @@ int frame_show(struct frame *frame)
 	return 0;
 }
 
+struct theme *frame_get_theme(struct frame *frame)
+{
+	if(frame->theme == frame->menu->theme) {
+		frame->theme = malloc(sizeof(struct theme));
+		if(frame->theme == NULL)
+			return NULL;
+		memcpy(frame->theme, frame->menu->theme,
+		       sizeof *frame->theme);
+	}
+	return frame->theme;
+}
+
 struct frame *frame_create(struct menu *menu, struct frame *parent)
 {
 	struct frame *frame;
@@ -271,11 +300,12 @@ struct frame *frame_create(struct menu *menu, struct frame *parent)
 	if(!frame)
 		return NULL;
 
-	frame->callback = NULL;
 	frame->menu = menu;
 	frame->parent = parent;
 	frame->surface = wl_compositor_create_surface(menu->ec);
 	frame->msurf = ms_menu_get_menu_surface(menu->ms, frame->surface);
+
+	frame->theme = menu->theme;
 
 	if(parent)
 		wl_list_insert(&parent->children, &frame->link);
@@ -304,6 +334,9 @@ static void frame_destroy(struct frame *frame)
 		buffer_destroy(frame->buffers[0]);
 	}
 
+	if(frame->theme != frame->menu->theme)
+		free(frame->theme);
+
 	ms_surface_destroy(frame->msurf);
 	wl_surface_destroy(frame->surface);
 
@@ -321,6 +354,17 @@ void menu_close(struct menu *menu)
 	}
 }
 
+struct theme *menu_get_theme(struct menu *menu)
+{
+	if(menu->theme == &default_theme) {
+		menu->theme = malloc(sizeof(struct theme));
+		if(menu->theme == NULL)
+			return NULL;
+		memcpy(menu->theme, &default_theme, sizeof *menu->theme);
+	}
+	return menu->theme;
+}
+
 struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 			 struct pool *pool)
 {
@@ -335,6 +379,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	menu->ms = ms;
 	menu->pool = pool;
 	wl_list_init(&menu->top_frames);
+	menu->theme = &default_theme;
 
 	if(api_init(menu) < 0) {
 		free(menu);
@@ -347,6 +392,10 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 void menu_destroy(struct menu *menu)
 {
 	menu_close(menu);
+
+	if(menu->theme != &default_theme)
+		free(menu->theme);
+
 	free(menu);
 	api_finish();
 }
