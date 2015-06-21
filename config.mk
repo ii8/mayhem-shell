@@ -8,3 +8,5 @@ CONFIGDIR=$$(getent passwd $(SUDO_USER) | cut -d: -f6)/.config
 CC=gcc
 CFLAGS=-Wall -Wextra -g -Wno-missing-field-initializers -Wno-unused-parameter
 
+USE_PYTHON=false
+USE_LUA=true

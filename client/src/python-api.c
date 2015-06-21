@@ -19,26 +19,12 @@ static PyObject *api_item_text_set_text(PyObject *self, PyObject *args)
 
 	printf("called set_text\n");
 
-	if(!PyArg_ParseTuple(args, "s", str))
+	if(!PyArg_ParseTuple(args, "s", &str))
 		return NULL;
 
 	item_text_set_text((struct item_text*)this->item, str);
 	Py_RETURN_TRUE;
 }
-
-static PyMethodDef api_item_text[] = {
-	{"set_text", api_item_text_set_text, METH_VARARGS, "Set text"},
-	{NULL, NULL, 0, NULL}
-};
-
-static PyTypeObject py_item_text_type = {
-	PyVarObject_HEAD_INIT(NULL, 0)
-	.tp_name = MODULE_NAME ".text",
-	.tp_basicsize = sizeof(struct py_item),
-	.tp_flags = Py_TPFLAGS_DEFAULT,
-	.tp_doc = "Text item",
-	.tp_methods = api_item_text
-};
 
 static PyMethodDef api_item_text[] = {
 	{"set_text", api_item_text_set_text, METH_VARARGS, "Set text"},
@@ -75,6 +61,26 @@ static PyObject *api_menu_show(PyObject *self, PyObject *args)
 	Py_RETURN_TRUE;
 }
 
+static PyObject *api_menu_close(PyObject *self, PyObject *args)
+{
+	struct py_menu *this = (struct py_menu*)self;
+
+	frame_destroy(this->frame);
+	this->frame = NULL;
+	Py_DECREF(this);
+	printf("refcnt: %i\n", Py_REFCNT(self));
+	//PyObject_Del(self);
+
+	Py_RETURN_NONE;
+}
+
+static void api_menu_del(void *self)
+{
+	struct py_menu *this = (struct py_menu*)self;
+
+	printf("python deleted py_menu\n");
+}
+
 static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 {
 	struct py_menu *this = (struct py_menu*)self;
@@ -86,7 +92,7 @@ static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 	if(!PyArg_ParseTuple(args, "s", &str))
 		return NULL;
 
-	item = item_text_create(frame, str?:"");
+	item = item_text_create(frame, str?str:"");
 	if(!item)
 		return PyErr_NoMemory();
 
@@ -99,19 +105,33 @@ static PyObject *api_menu_add_text(PyObject *self, PyObject *args)
 static PyObject *api_menu_add_bar(PyObject *self, PyObject *args)
 {
 	struct py_menu *this = (struct py_menu*)self;
+	struct py_item *bar;
 	PyDictObject *py_theme = NULL;
-	struct theme *theme;
 	int height;
-
-	if(theme == NULL)
-		return PyErr_NoMemory();
 
 	if(!PyArg_ParseTuple(args, "i|O!", &height, &PyDict_Type, &py_theme))
 		return NULL;
 
-	if(py_theme) {
-		theme = frame_get_theme(this->frame);
+	bar = PyObject_New(struct py_item, &py_item_text_type);
+	if(bar == NULL)
+		return PyErr_NoMemory();
+
+	bar->item = (struct item *)item_bar_create(this->frame, height);
+	if(!bar->item) {
+		Py_DECREF(bar);
+		return PyErr_NoMemory();
 	}
+
+	return (PyObject *)bar;
+/*
+	if(py_theme) {
+		struct theme *theme;
+
+		theme = frame_get_theme(this->frame);
+		if(theme == NULL)
+			return PyErr_NoMemory();
+
+	}*/
 }
 
 static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
@@ -123,8 +143,9 @@ static PyObject *api_menu_on_enter(PyObject *self, PyObject *args)
 
 static PyMethodDef api_menu[] = {
 	{"show", api_menu_show, METH_VARARGS, "Show the menu"},
+	{"close", api_menu_close, METH_NOARGS, "Close menu"},
 	{"add_text", api_menu_add_text, METH_VARARGS, "Add a text item"},
-	("add_bar", api_menu_add_bar, METH_VARARGS, "Add a bar"},
+	{"add_bar", api_menu_add_bar, METH_VARARGS, "Add a bar"},
 	{"on_enter", api_menu_on_enter, METH_VARARGS, "Mouse enter callback"},
 	{NULL, NULL, 0, NULL}
 };
@@ -135,12 +156,12 @@ static PyTypeObject py_menu_type = {
 	.tp_basicsize = sizeof(struct py_menu),
 	.tp_flags = Py_TPFLAGS_DEFAULT,
 	.tp_doc = "Menu Object",
-	.tp_methods = api_menu
+	.tp_methods = api_menu,
+	.tp_free = api_menu_del
 };
 
 static PyObject *api_base_close(PyObject *self, PyObject *args)
 {
-	struct frame *child, *tmp;
 	(void)self;
 	(void)args;
 
@@ -168,6 +189,7 @@ static PyObject *api_base_spawn(PyObject *self, PyObject *args)
 	py_frame = PyObject_New(struct py_menu, &py_menu_type);
 	py_frame->frame = frame;
 
+	Py_DECREF(py_frame);
 	return (PyObject*)py_frame;
 }
 
@@ -265,7 +287,7 @@ err:
 	return -1;
 }
 
-void api_finish()
+void api_finish(void)
 {
 	menu_global = NULL;
 	Py_Finalize();

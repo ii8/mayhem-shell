@@ -42,7 +42,7 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 	struct buffer *buffer, *segment;
 	int stride, size;
 
-	stride = cairo_stride_for_width(CAIRO_FORMAT_ARGB32, width);
+	stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, width);
 	size = stride * height;
 	if(size % pagesize)
 		size += pagesize - size % pagesize;

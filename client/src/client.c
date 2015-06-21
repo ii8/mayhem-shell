@@ -9,7 +9,6 @@
 #include <wayland-client-core.h>
 //#include <wayland-cursor.h>
 #include "mayhem-client.h"
-#include "list.h"
 #include "pool.h"
 #include "menu.h"
 
@@ -25,7 +24,7 @@ struct display {
 	struct wl_output *output;//temporary
 	int output_width, output_height;
 	struct ms_menu *ms;
-	struct menu *root_menu;
+	struct menu *menu;
 	struct list *outputs;
 
 	uint32_t formats;
@@ -64,7 +63,7 @@ static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
 	struct display *d = data;
 	struct menu *menu;
 
-	if(d->root_menu != NULL)
+	if(d->menu != NULL)
 		return;
 
 	menu = menu_create(d->compositor, d->ms, d->pool);
@@ -72,18 +71,18 @@ static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
 		fprintf(stderr, "Could not create menu");
 		return;
 	}
-	d->root_menu = menu;
+	d->menu = menu;
 }
 
 static void ms_despawn(void* data, struct ms_menu *ms_menu)
 {
 	struct display *d = data;
 
-	if(d->root_menu == NULL)
+	if(d->menu == NULL)
 		return;
 
-	menu_destroy(d->root_menu);
-	d->root_menu = NULL;
+	menu_destroy(d->menu);
+	d->menu = NULL;
 }
 
 static const struct ms_menu_listener ms_listener = {
@@ -182,7 +181,7 @@ static const struct wl_registry_listener registry_listener = {
 	registry_handle_global_remove
 };
 
-static struct display *display_create()
+static struct display *display_create(void)
 {
 	struct display *display;
 
@@ -328,8 +327,8 @@ int main(int argc, char *argv[])
 	if(bg)
 		bg_destroy(bg);
 
-	if(display->root_menu)
-		menu_destroy(root_menu);
+	if(display->menu)
+		menu_destroy(display->menu);
 
 	display_destroy(display);
 
