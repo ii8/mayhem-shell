@@ -10,6 +10,7 @@
 #define MODULE_NAME "mayhem"
 #define META_MENU MODULE_NAME "_menu_mt"
 #define META_TEXT MODULE_NAME "_text_mt"
+#define META_BAR MODULE_NAME "_bar_mt"
 
 static jmp_buf panic_env;
 static struct menu *menu_global;
@@ -26,7 +27,17 @@ static int api_menu_show(lua_State *ls)
 	struct frame *frame = *userdata;
 
 	frame_show(frame);
-	
+
+	return 0;
+}
+
+static int api_menu_close(lua_State *ls)
+{
+	struct frame **userdata = luaL_checkudata(ls, 1, META_MENU);
+	struct frame *frame = *userdata;
+
+	frame_destroy(frame);
+
 	return 0;
 }
 
@@ -52,24 +63,36 @@ static int api_base_spawn(lua_State *ls)
 
 	frame = lua_newuserdata(ls, sizeof(struct frame *));
 	luaL_setmetatable(ls, META_MENU);
-	
+
 	*frame = frame_create(menu_global, NULL);
 
 	return 1;
 }
 
+static int api_base_close(lua_State *ls)
+{
+	menu_close(menu_global);
+
+	return 0;
+}
+
 static const luaL_Reg base_api[] = {
 	{ "spawn_menu", api_base_spawn },
+	{ "close", api_base_close },
+	{ "set_theme", api_base_set_theme },
 	{ 0, 0 }
 };
 
 static const luaL_Reg api_menu[] = {
 	{ "show", api_menu_show },
+	{ "close", api_menu_close },
+	{ "set_theme", api_menu_set_theme },
 	{ "add_text", api_menu_add_text },
+	{ "add_bar", api_menu_add_bar },
 	{ 0, 0 }
 };
 
-static int register_base(lua_State *ls)
+static int luaopen_mayhem(lua_State *ls)
 {
 	luaL_newlib(ls, base_api);
 
@@ -94,13 +117,13 @@ int api_init(struct menu *menu)
 
 	lua_atpanic(ls, panic);
 
-	luaL_requiref(ls, MODULE_NAME, register_base, 1);
+	luaL_requiref(ls, MODULE_NAME, luaopen_mayhem, 1);
 	lua_pop(ls, 1);
 
 	if(luaL_loadfile(ls, "/home/murray/Desktop/try/meh.lua"))
 		goto err;
 
-	if(lua_pcall(ls, 0, 1, 0))
+	if(lua_pcall(ls, 0, 0, 0))
 		goto err;
 
 	lua_getglobal(ls, "main");
@@ -112,7 +135,7 @@ int api_init(struct menu *menu)
 
 err:
 	if(lua_isstring(ls, -1))
-		printf("%s\n", lua_tostring(ls, -1));
+		printf("Lua error: %s\n", lua_tostring(ls, -1));
 	else
 		printf("Error without message");
 
