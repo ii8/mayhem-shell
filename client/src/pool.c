@@ -114,7 +114,7 @@ void buffer_destroy(struct buffer* buffer)
 {
 	struct buffer *segment;
 
-	assert(~buffer->flags & BUFFER_BUSY);
+	//assert(~buffer->flags & BUFFER_BUSY);
 	assert(buffer->flags & BUFFER_ACTIVE);
 
 	buffer->flags &= ~BUFFER_ACTIVE;

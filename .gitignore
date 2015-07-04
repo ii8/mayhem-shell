@@ -1,5 +1,7 @@
 *.o
 *.so
+*.swp
+tags
 protocol/*.c
 protocol/*.h
 client/mayhem-menu

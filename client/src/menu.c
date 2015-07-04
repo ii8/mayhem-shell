@@ -20,16 +20,18 @@ struct frame {
 	struct ms_surface *msurf;
 	struct buffer *buffers[2];
 	struct wl_callback *callback;
+	/* need_resize is usually set to 2, one resize for each buffer */
 	int dirty, need_resize;
 	struct menu *menu;
 	struct frame *parent; /* NULL if first */
 	struct theme *theme;
 	struct wl_list children;
 	struct wl_list items;
+	void (*api_destroy)(void *data);
+	void *api_data;
 };
 
 struct menu {
-	int closed;
 	struct pool *pool;
 	struct wl_compositor *ec;
 	struct ms_menu *ms;
@@ -48,6 +50,8 @@ struct item {
 	enum item_type type;
 	void (*draw)(struct item *, cairo_t *, int);
 	void (*destroy)(struct item *);
+	void (*api_destroy)(void *data);
+	void *api_data;
 	int height;
 	int padding[4];
 	// struct border*
@@ -67,27 +71,30 @@ static const struct theme default_theme = {
 	.max_width = 400
 };
 
-/*
-struct item *item_create(struct frame *parent, enum item_type type)
+static struct buffer *swap_buffers(struct frame *frame)
 {
-	struct item *item;
+	struct buffer *buffer;
+	int i = 0;
 
-	switch(type) {
-		case ITEM_NONE:
-			item = calloc(1, sizeof(struct item));
-			break;
-		case ITEM_TEXT:
-			item = calloc(1, sizeof(struct item_text));
-			break;
+	if(frame->buffers[i]->flags & BUFFER_BUSY)
+		if(frame->buffers[++i]->flags & BUFFER_BUSY)
+			assert(0);
+	buffer = frame->buffers[i];
+	assert(buffer->flags & BUFFER_ACTIVE);
+
+	if(frame->need_resize) {
+		buffer_destroy(buffer);
+		buffer = buffer_create(frame->menu->pool,
+				       frame->width,
+				       frame->height,
+				       WL_SHM_FORMAT_ARGB8888);
+		frame->buffers[i] = buffer;
+		frame->need_resize--;
 	}
-	if(!item)
-		return NULL;
-	item->type = type;
-	wl_list_insert(&parent->items, item->link);
+	buffer->flags |= BUFFER_BUSY;
 
-	return item;
+	return buffer;
 }
-*/
 
 static const struct wl_callback_listener frame_listener;
 
@@ -98,27 +105,15 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	struct buffer *buffer;
 	cairo_surface_t *surface;
 	cairo_t *cr;
-	int i = 0;
 	unsigned int stride;
+	int offset;
+
+	assert(callback == frame->callback);
 
 	if(!frame->dirty)
 		goto end;
 
-
-	if(frame->buffers[i]->flags & BUFFER_BUSY)
-		if(frame->buffers[++i]->flags & BUFFER_BUSY)
-			assert(0);
-	buffer = frame->buffers[i];
-	assert(buffer->flags & BUFFER_ACTIVE);
-
-	if(frame->need_resize--) {
-		buffer_destroy(buffer);
-		buffer = buffer_create(frame->menu->pool,
-				       frame->width,
-				       frame->height,
-				       WL_SHM_FORMAT_ARGB8888);
-		frame->buffers[i] = buffer;
-	}
+	buffer = swap_buffers(frame);
 
 	stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32,
 					       frame->width);
@@ -131,14 +126,15 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	cairo_surface_destroy(surface);
 
 	cairo_set_source_rgba(cr, 1, 1, 0, 0.80);
-	//cairo_paint(cr);
-	cairo_move_to(cr, 0, 50);
+	cairo_paint(cr);
+	offset = 0;
 
 	wl_list_for_each(item, &frame->items, link) {
-		cairo_save(cr);
+		//cairo_save(cr);
+		cairo_move_to(cr, 0, offset);
 		item->draw(item, cr, frame->width);
-		cairo_restore(cr);
-		cairo_rel_move_to(cr, 0, item->height);
+		//cairo_restore(cr);
+		offset += item->height;
 	}
 
 	if(cairo_status(cr) != CAIRO_STATUS_SUCCESS)
@@ -148,8 +144,6 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 
 	wl_surface_attach(frame->surface, buffer->buffer, 0, 0);
 	wl_surface_damage(frame->surface, 0, 0, frame->width, frame->height);
-	wl_surface_commit(frame->surface);
-	buffer->flags |= BUFFER_BUSY;
 	frame->dirty = 0;
 
 end:
@@ -158,6 +152,7 @@ end:
 
 	frame->callback = wl_surface_frame(frame->surface);
 	wl_callback_add_listener(frame->callback, &frame_listener, frame);
+	wl_surface_commit(frame->surface);
 }
 
 static const struct wl_callback_listener frame_listener = {
@@ -179,11 +174,13 @@ static void item_text_draw(struct item *item, cairo_t *cr, int width)
 
 	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL,
 			       CAIRO_FONT_WEIGHT_BOLD);
-	cairo_set_font_size(cr, 24);
+	cairo_set_font_size(cr, 44);
 
-	//cairo_show_text(cr, text->text);
-	cairo_text_path(cr, text->text);
-	cairo_stroke(cr);
+	//cairo_move_to(cr,0,0);
+	cairo_show_text(cr, text->text);
+
+	//cairo_text_path(cr, text->text);
+	//cairo_stroke(cr);
 }
 
 void item_text_set_text(struct item_text *item, const char *text)
@@ -196,6 +193,8 @@ static void item_text_destroy(struct item *item)
 {
 	struct item_text *item_text = (struct item_text *)item;
 
+	item->api_destroy(item->api_data);
+
 	free(item_text->text);
 	free(item_text->font);
 
@@ -203,10 +202,16 @@ static void item_text_destroy(struct item *item)
 	free(item);
 }
 
-struct item_text *item_text_create(struct frame *parent, const char* text)
+struct item_text *item_text_create(struct frame *parent,
+				   void (*callback)(void *),
+				   void *data,
+				   const char* text)
 {
 	struct item_text *item;
-	int width = 150;
+	cairo_t *cr;
+	cairo_surface_t *cs;
+	cairo_font_extents_t font_ext;
+	cairo_text_extents_t text_ext;
 
 	item = calloc(1, sizeof(struct item_text));
 	if(!item)
@@ -215,16 +220,30 @@ struct item_text *item_text_create(struct frame *parent, const char* text)
 	item->base.type = ITEM_TEXT;
 	item->base.draw = item_text_draw;
 	item->base.destroy = item_text_destroy;
+	if(callback) {
+		item->base.api_destroy = callback;
+		item->base.api_data = data;
+	}
 
-	//TODO
-	item->base.height = 100;
-	item->width = width;
+	cs = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 0, 0);
+	cr = cairo_create(cs);
+	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL,
+			       CAIRO_FONT_WEIGHT_BOLD);
+	cairo_set_font_size(cr, 44);
+	cairo_font_extents(cr, &font_ext);
+	cairo_text_extents(cr, text, &text_ext);
+	cairo_surface_destroy(cs);
+	cairo_destroy(cr);
+
+	item->base.height = font_ext.ascent + font_ext.descent;
+	item->width = text_ext.width;
 	item->text = strdup(text);
 
 	wl_list_insert(parent->items.prev, &item->base.link);
-	parent->need_resize = 1;
+	parent->need_resize = 2;
 	parent->dirty = 1;
-	parent->width = width > parent->width ? width : parent->width;
+	if(item->width > parent->width)
+		parent->width = item->width;
 	if(parent->width > parent->theme->max_width)
 		parent->width = parent->theme->max_width;
 	parent->height += item->base.height;
@@ -251,15 +270,25 @@ static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 {
 	struct item_bar *bar = (struct item_bar *)item;
 
+	cairo_set_line_width(cr, item->height);
+	cairo_set_source_rgba(cr, 0.4, 0.5, 0.5, 1.0);
+
+	//cairo_rel_move_to(cr, 10, 10);//TODO padding??
+	cairo_rel_line_to(cr, width * bar->fill, 0);
+	cairo_stroke(cr);
 }
 
 static void item_bar_destroy(struct item *item)
 {
+	item->api_destroy(item->api_data);
 	wl_list_remove(&item->link);
 	free(item);
 }
 
-struct item_bar *item_bar_create(struct frame *parent, int height)
+struct item_bar *item_bar_create(struct frame *parent,
+				 void (*callback)(void *),
+				 void *data,
+				 int height)
 {
 	struct item_bar * item;
 
@@ -274,11 +303,16 @@ struct item_bar *item_bar_create(struct frame *parent, int height)
 	item->base.height = height;
 	memcpy(item->base.padding, parent->theme->padding, sizeof(int[4]));
 
+	if(callback) {
+		item->base.api_destroy = callback;
+		item->base.api_data = data;
+	}
+
 	item->color = parent->theme->color;
 	item->align = ITEM_ALIGN_LEFT;
 	item->fill = 1;
 
-	parent->need_resize = 1;
+	parent->need_resize = 2;
 	parent->height += item->base.height;
 
 	return item;
@@ -329,7 +363,10 @@ struct theme *frame_get_theme(struct frame *frame)
 	return frame->theme;
 }
 
-struct frame *frame_create(struct menu *menu, struct frame *parent)
+struct frame *frame_create(struct menu *menu,
+			   struct frame *parent,
+			   void (*callback)(void *),
+			   void *data)
 {
 	struct frame *frame;
 
@@ -354,6 +391,11 @@ struct frame *frame_create(struct menu *menu, struct frame *parent)
 	wl_list_init(&frame->children);
 	wl_list_init(&frame->items);
 
+	if(callback != NULL) {
+		frame->api_destroy = callback;
+		frame->api_data = data;
+	}
+
 	return frame;
 }
 
@@ -371,6 +413,9 @@ void frame_destroy(struct frame *frame)
 		printf("clearing item\n");
 		item->destroy(item);
 	}
+
+	if(frame->api_destroy)
+		frame->api_destroy(frame->api_data);
 
 	if(frame->callback) {
 		wl_callback_destroy(frame->callback);
@@ -406,9 +451,6 @@ struct theme *menu_get_theme(struct menu *menu)
 	return menu->theme;
 }
 
-int api_init(struct menu *);
-void api_finish(void);
-
 struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 			 struct pool *pool)
 {
@@ -418,7 +460,6 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	if(!menu)
 		goto err_menu;
 
-	menu->closed = 0;
 	menu->ec = ec;
 	menu->ms = ms;
 	menu->pool = pool;

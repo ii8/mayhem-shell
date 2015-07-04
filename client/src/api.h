@@ -30,15 +30,21 @@ struct menu;
 void menu_close(struct menu *);
 struct theme *menu_get_theme(struct menu *menu);
 
-struct frame *frame_create(struct menu *menu, struct frame *parent);
+struct frame *frame_create(struct menu *menu, struct frame *parent,
+			   void (*)(void *), void *);
 void frame_destroy(struct frame *frame);
 struct theme *frame_get_theme(struct frame *frame);
 int frame_show(struct frame *);
 
-struct item_bar *item_bar_create(struct frame *parent, int height);
+struct item_bar *item_bar_create(struct frame *parent, void (*)(void *),
+				 void *, int height);
 
-struct item_text *item_text_create(struct frame *parent, const char* text);
+struct item_text *item_text_create(struct frame *parent, void (*)(void *),
+				   void *, const char* text);
 void item_text_set_text(struct item_text *item, const char *text);
+
+int api_init(struct menu *);
+void api_finish(void);
 
 #endif
 

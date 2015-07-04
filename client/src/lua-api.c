@@ -12,6 +12,11 @@
 #define META_TEXT MODULE_NAME "_text_mt"
 #define META_BAR MODULE_NAME "_bar_mt"
 
+struct userdata {
+	int valid;
+	void *data;
+};
+
 static jmp_buf panic_env;
 static struct menu *menu_global;
 static lua_State *ls_global;
@@ -21,10 +26,37 @@ static int panic(lua_State *ls)
 	longjmp(panic_env, 1);
 }
 
+static void *getself(lua_State *ls, char *mt, char *f)
+{
+	struct userdata *data = luaL_checkudata(ls, 1, mt);
+
+	if(!data->valid)
+		luaL_error(ls, "attempt to call method '%s' "
+			   "on invalid object", f);
+
+	return data->data;
+}
+
+static void destroy_userdata(void *data)
+{
+	struct userdata *le_data = (struct userdata *)data;
+
+	le_data->valid = 0;
+}
+
+static int api_text_set_text(lua_State *ls)
+{
+	struct item_text *item = getself(ls, META_TEXT, "set_text");
+	const char *text = luaL_checkstring(ls, 2);
+
+	item_text_set_text(item, text);
+
+	return 0;
+}
+
 static int api_menu_show(lua_State *ls)
 {
-	struct frame **userdata = luaL_checkudata(ls, 1, META_MENU);
-	struct frame *frame = *userdata;
+	struct frame *frame = getself(ls, META_MENU, "show");
 
 	frame_show(frame);
 
@@ -33,38 +65,60 @@ static int api_menu_show(lua_State *ls)
 
 static int api_menu_close(lua_State *ls)
 {
-	struct frame **userdata = luaL_checkudata(ls, 1, META_MENU);
-	struct frame *frame = *userdata;
+	struct frame *frame = getself(ls, META_MENU, "close");
 
 	frame_destroy(frame);
 
 	return 0;
 }
 
+static int api_menu_set_theme(lua_State *ls)
+{
+
+	return 0;
+}
+
 static int api_menu_add_text(lua_State *ls)
 {
-	struct item **item;
-	struct frame **userdata = luaL_checkudata(ls, 1, META_MENU);
-	struct frame *frame = *userdata;
+	struct userdata *data;
+	struct frame *frame = getself(ls, META_MENU, "add_text");
 
 	char *text = luaL_checkstring(ls, 2);
 
-	item = lua_newuserdata(ls, sizeof(struct item *));
-	//luaL_setmetatable(ls, META_TEXT);
+	data = lua_newuserdata(ls, sizeof(*data));
+	luaL_setmetatable(ls, META_TEXT);
 
-	*item = (struct item *)item_text_create(frame, text);
+	data->valid = 1;
+	data->data = item_text_create(frame, destroy_userdata, data, text);
+
+	return 1;
+}
+
+static int api_menu_add_bar(lua_State *ls)
+{
+	struct userdata *data;
+	struct frame *frame = getself(ls, META_MENU, "add_bar");
+
+	luaL_checknumber(ls, 2);
+
+	data = lua_newuserdata(ls, sizeof(*data));
+	luaL_setmetatable(ls, META_BAR);
+	data->valid = 1;
+	data->data = item_bar_create(frame, destroy_userdata, data,
+				     lua_tonumber(ls, 2));
 
 	return 1;
 }
 
 static int api_base_spawn(lua_State *ls)
 {
-	struct frame **frame;
+	struct userdata *data;
 
-	frame = lua_newuserdata(ls, sizeof(struct frame *));
+	data = lua_newuserdata(ls, sizeof(*data));
 	luaL_setmetatable(ls, META_MENU);
 
-	*frame = frame_create(menu_global, NULL);
+	data->valid = 1;
+	data->data = frame_create(menu_global, NULL, destroy_userdata, data);
 
 	return 1;
 }
@@ -76,7 +130,14 @@ static int api_base_close(lua_State *ls)
 	return 0;
 }
 
-static const luaL_Reg base_api[] = {
+static int api_base_set_theme(lua_State *ls)
+{
+	struct theme* theme = menu_get_theme(menu_global);
+
+	return 0;
+}
+
+static const luaL_Reg api_base[] = {
 	{ "spawn_menu", api_base_spawn },
 	{ "close", api_base_close },
 	{ "set_theme", api_base_set_theme },
@@ -92,14 +153,25 @@ static const luaL_Reg api_menu[] = {
 	{ 0, 0 }
 };
 
+static const luaL_Reg api_text[] = {
+	{ "set_text", api_text_set_text },
+	{ 0, 0 }
+};
+
 static int luaopen_mayhem(lua_State *ls)
 {
-	luaL_newlib(ls, base_api);
+	luaL_newlib(ls, api_base);
 
 	luaL_newmetatable(ls, META_MENU);
 	lua_pushvalue(ls, -1);
 	lua_setfield(ls, -2, "__index");
 	luaL_setfuncs(ls, api_menu, 0);
+	lua_pop(ls, 1);
+
+	luaL_newmetatable(ls, META_TEXT);
+	lua_pushvalue(ls, -1);
+	lua_setfield(ls, -2, "__index");
+	luaL_setfuncs(ls, api_text, 0);
 	lua_pop(ls, 1);
 
 	return 1;
@@ -144,7 +216,7 @@ err:
 	return -1;
 }
 
-void api_finish()
+void api_finish(void)
 {
 	menu_global = NULL;
 	lua_close(ls_global);

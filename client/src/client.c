@@ -68,7 +68,7 @@ static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
 
 	menu = menu_create(d->compositor, d->ms, d->pool);
 	if(!menu) {
-		fprintf(stderr, "Could not create menu");
+		fprintf(stderr, "Could not create menu\n");
 		return;
 	}
 	d->menu = menu;
