@@ -38,6 +38,7 @@ int frame_show(struct frame *);
 
 struct item_bar *item_bar_create(struct frame *parent, void (*)(void *),
 				 void *, int height);
+void item_bar_set_fill(struct item_bar *, double);
 
 struct item_text *item_text_create(struct frame *parent, void (*)(void *),
 				   void *, const char* text);

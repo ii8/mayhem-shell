@@ -47,6 +47,7 @@ enum item_type {
 
 struct item {
 	struct wl_list link;
+	struct frame *parent;
 	enum item_type type;
 	void (*draw)(struct item *, cairo_t *, int);
 	void (*destroy)(struct item *);
@@ -125,8 +126,10 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	cr = cairo_create(surface);
 	cairo_surface_destroy(surface);
 
-	cairo_set_source_rgba(cr, 1, 1, 0, 0.80);
+	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
 	cairo_paint(cr);
+	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	cairo_set_source_rgba(cr, 1, 1, 1, 1.0);
 	offset = 0;
 
 	wl_list_for_each(item, &frame->items, link) {
@@ -159,6 +162,26 @@ static const struct wl_callback_listener frame_listener = {
 	redraw
 };
 
+static void item_init(struct item *item, struct frame *parent,
+		      void (*api_destroy)(void *), void *api_data)
+{
+	item->parent = parent;
+
+	if(api_destroy) {
+		item->api_destroy = api_destroy;
+		item->api_data = api_data;
+	}
+
+	wl_list_insert(parent->items.prev, &item->link);
+
+	//memcpy(item->base.padding, parent->theme->padding, sizeof(int[4]));
+
+	parent->need_resize = 2;
+	parent->dirty = 1;
+
+	parent->height += item->height;
+}
+
 /* Text item */
 struct item_text {
 	struct item base;
@@ -167,6 +190,13 @@ struct item_text {
 	uint32_t color;
 	int size;
 };
+
+void item_text_set_text(struct item_text *item, const char *text)
+{
+	free(item->text);
+	item->text = strdup(text);
+	item->base.parent->dirty = 1;
+}
 
 static void item_text_draw(struct item *item, cairo_t *cr, int width)
 {
@@ -177,16 +207,11 @@ static void item_text_draw(struct item *item, cairo_t *cr, int width)
 	cairo_set_font_size(cr, 44);
 
 	//cairo_move_to(cr,0,0);
+	cairo_rel_move_to(cr, 0, item->height);
 	cairo_show_text(cr, text->text);
 
 	//cairo_text_path(cr, text->text);
 	//cairo_stroke(cr);
-}
-
-void item_text_set_text(struct item_text *item, const char *text)
-{
-	free(item->text);
-	item->text = strdup(text);
 }
 
 static void item_text_destroy(struct item *item)
@@ -220,10 +245,6 @@ struct item_text *item_text_create(struct frame *parent,
 	item->base.type = ITEM_TEXT;
 	item->base.draw = item_text_draw;
 	item->base.destroy = item_text_destroy;
-	if(callback) {
-		item->base.api_destroy = callback;
-		item->base.api_data = data;
-	}
 
 	cs = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 0, 0);
 	cr = cairo_create(cs);
@@ -239,14 +260,12 @@ struct item_text *item_text_create(struct frame *parent,
 	item->width = text_ext.width;
 	item->text = strdup(text);
 
-	wl_list_insert(parent->items.prev, &item->base.link);
-	parent->need_resize = 2;
-	parent->dirty = 1;
 	if(item->width > parent->width)
 		parent->width = item->width;
 	if(parent->width > parent->theme->max_width)
 		parent->width = parent->theme->max_width;
-	parent->height += item->base.height;
+
+	item_init((struct item *)item, parent, callback, data);
 
 	return item;
 }
@@ -266,6 +285,12 @@ struct item_bar {
 	*/
 };
 
+void item_bar_set_fill(struct item_bar *item, double fill)
+{
+	item->fill = fill;
+	item->base.parent->dirty = 1;
+}
+
 static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 {
 	struct item_bar *bar = (struct item_bar *)item;
@@ -274,6 +299,8 @@ static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 	cairo_set_source_rgba(cr, 0.4, 0.5, 0.5, 1.0);
 
 	//cairo_rel_move_to(cr, 10, 10);//TODO padding??
+
+	cairo_rel_move_to(cr, 0, item->height / 2);
 	cairo_rel_line_to(cr, width * bar->fill, 0);
 	cairo_stroke(cr);
 }
@@ -296,24 +323,16 @@ struct item_bar *item_bar_create(struct frame *parent,
 	if(!item)
 		return NULL;
 
-	wl_list_insert(parent->items.prev, &item->base.link);
 	item->base.type = ITEM_BAR;
 	item->base.draw = item_bar_draw;
 	item->base.destroy = item_bar_destroy;
 	item->base.height = height;
-	memcpy(item->base.padding, parent->theme->padding, sizeof(int[4]));
-
-	if(callback) {
-		item->base.api_destroy = callback;
-		item->base.api_data = data;
-	}
 
 	item->color = parent->theme->color;
 	item->align = ITEM_ALIGN_LEFT;
 	item->fill = 1;
 
-	parent->need_resize = 2;
-	parent->height += item->base.height;
+	item_init((struct item *)item, parent, callback, data);
 
 	return item;
 }
@@ -480,6 +499,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	return menu;
 
 err:
+	menu_close(menu);
 	free(menu->theme->font_family);
 err_font:
 	free(menu->theme);
@@ -492,9 +512,9 @@ err_menu:
 void menu_destroy(struct menu *menu)
 {
 	menu_close(menu);
+	api_finish();
 	free(menu->theme->font_family);
 	free(menu->theme);
 	free(menu);
-	api_finish();
 }
 

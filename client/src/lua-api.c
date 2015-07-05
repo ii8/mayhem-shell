@@ -54,6 +54,22 @@ static int api_text_set_text(lua_State *ls)
 	return 0;
 }
 
+static int api_bar_set_fill(lua_State *ls)
+{
+	struct item_bar *item = getself(ls, META_BAR, "set_fill");
+	double fill = luaL_checknumber(ls, 2);
+	fill /= 100;
+
+	if(fill > 1.0)
+		fill = 1.0;
+	else if(fill < 0.0)
+		fill = 0.0;
+
+	item_bar_set_fill(item, fill);
+
+	return 0;
+}
+
 static int api_menu_show(lua_State *ls)
 {
 	struct frame *frame = getself(ls, META_MENU, "show");
@@ -158,6 +174,11 @@ static const luaL_Reg api_text[] = {
 	{ 0, 0 }
 };
 
+static const luaL_Reg api_bar[] = {
+	{ "set_fill", api_bar_set_fill },
+	{ 0, 0 }
+};
+
 static int luaopen_mayhem(lua_State *ls)
 {
 	luaL_newlib(ls, api_base);
@@ -172,6 +193,12 @@ static int luaopen_mayhem(lua_State *ls)
 	lua_pushvalue(ls, -1);
 	lua_setfield(ls, -2, "__index");
 	luaL_setfuncs(ls, api_text, 0);
+	lua_pop(ls, 1);
+
+	luaL_newmetatable(ls, META_BAR);
+	lua_pushvalue(ls, -1);
+	lua_setfield(ls, -2, "__index");
+	luaL_setfuncs(ls, api_bar, 0);
 	lua_pop(ls, 1);
 
 	return 1;
