@@ -13,6 +13,8 @@
 #include "menu.h"
 #include "api.h"
 
+#define PI 3.141592654
+
 struct frame {
 	struct wl_list link;
 	int width, height;
@@ -48,7 +50,7 @@ enum item_type {
 struct item {
 	struct wl_list link;
 	struct frame *parent;
-	enum item_type type;
+	enum item_type type; //might not need this
 	void (*draw)(struct item *, cairo_t *, int);
 	void (*destroy)(struct item *);
 	void (*api_destroy)(void *data);
@@ -60,17 +62,26 @@ struct item {
 
 static const struct theme default_theme = {
 	.color = 0xFF4791FF,
-	.color_from = 0xFF363636,
+	.color_from = 0xFF36A036,
 	.color_to = 0xFF363636,
 	.font_family = "serif",
 	//.font_slant = CAIRO_FONT_SLANT_NORMAL,
 	//.font_weight = CAIRO_FONT_WEIGHT_NORMAL,
 	.padding = { 0, 0, 0, 0 },
 	.align = ITEM_ALIGN_LEFT,
-	.radius = 0,
+	.radius = 10,
 	.min_width = 100,
 	.max_width = 400
 };
+
+static void decimal_color(uint32_t color, double *r, double *g, double *b,
+			  double *a)
+{
+	*r = (double)(color & 0xFF) / 255;
+	*g = (double)(color >> 0x08 & 0xFF) / 255;
+	*b = (double)(color >> 0x10 & 0xFF) / 255;
+	*a = (double)(color >> 0x18 & 0xFF) / 255;
+}
 
 static struct buffer *swap_buffers(struct frame *frame)
 {
@@ -95,6 +106,33 @@ static struct buffer *swap_buffers(struct frame *frame)
 	buffer->flags |= BUFFER_BUSY;
 
 	return buffer;
+}
+
+static void draw_bg(cairo_t *cr, struct frame *frame)
+{
+	struct theme *theme = frame->theme;
+	int rad = frame->theme->radius;
+	cairo_pattern_t *bg;
+	double rf, gf, bf, af;
+	double rt, gt, bt, at;
+
+	decimal_color(theme->color_from, &rf, &gf, &bf, &af);
+	decimal_color(theme->color_to, &rt, &gt, &bt, &at);
+
+	bg = cairo_pattern_create_linear(0, 0, 0, frame->height);
+	cairo_pattern_add_color_stop_rgba(bg, 0, rf, gf, bf, af);
+	cairo_pattern_add_color_stop_rgba(bg, 1, rt, gt, bt, at);
+
+	cairo_new_sub_path(cr);
+	cairo_arc(cr, rad, rad, rad, PI, 1.5 * PI);
+	cairo_arc(cr, frame->width - rad, rad, rad, 1.5 * PI, 0);
+	cairo_arc(cr, frame->width - rad, frame->height - rad, rad, 0, 0.5 * PI);
+	cairo_arc(cr, rad, frame->height - rad, rad, 0.5 * PI, PI);
+	cairo_close_path(cr);
+
+	cairo_set_source(cr, bg);
+	cairo_fill(cr);
+	cairo_pattern_destroy(bg);
 }
 
 static const struct wl_callback_listener frame_listener;
@@ -123,12 +161,14 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 						      frame->width,
 						      frame->height,
 						      stride);
+
 	cr = cairo_create(surface);
 	cairo_surface_destroy(surface);
 
-	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-	cairo_paint(cr);
-	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+//	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+//	cairo_paint(cr);
+//	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+	draw_bg(cr, frame);
 	cairo_set_source_rgba(cr, 1, 1, 1, 1.0);
 	offset = 0;
 
@@ -260,10 +300,12 @@ struct item_text *item_text_create(struct frame *parent,
 	item->width = text_ext.width;
 	item->text = strdup(text);
 
-	if(item->width > parent->width)
-		parent->width = item->width;
-	if(parent->width > parent->theme->max_width)
-		parent->width = parent->theme->max_width;
+	if(!parent->callback) {
+		if(item->width > parent->width)
+			parent->width = item->width;
+		if(parent->width > parent->theme->max_width)
+			parent->width = parent->theme->max_width;
+	}
 
 	item_init((struct item *)item, parent, callback, data);
 
@@ -499,7 +541,6 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	return menu;
 
 err:
-	menu_close(menu);
 	free(menu->theme->font_family);
 err_font:
 	free(menu->theme);

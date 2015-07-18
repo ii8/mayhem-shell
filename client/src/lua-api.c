@@ -238,6 +238,7 @@ err:
 	else
 		printf("Error without message");
 
+	menu_close(menu);
 	menu_global = NULL;
 	lua_close(ls);
 	return -1;
