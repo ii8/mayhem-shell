@@ -1,4 +1,7 @@
 
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
 #include <setjmp.h>
 
 #include <lua.h>
@@ -23,8 +26,42 @@ static lua_State *ls_global;
 
 static int panic(lua_State *ls)
 {
+	(void)ls;
 	longjmp(panic_env, 1);
 }
+
+#ifndef NDEBUG
+static void dump_stack(lua_State *ls)
+{
+	int i;
+	int top = lua_gettop(ls);
+
+	printf("| ");
+	for(i = 1; i<=top; i++) {
+		int t = lua_type(ls, i);
+
+		switch(t) {
+		case LUA_TSTRING:
+			printf("\"%s\"", lua_tostring(ls, i));
+			break;
+
+		case LUA_TBOOLEAN:
+			printf(lua_toboolean(ls, i)?"true":"false");
+			break;
+
+		case LUA_TNUMBER:
+			printf("%g", lua_tonumber(ls, i));
+			break;
+
+		default:
+			printf("%s", lua_typename(ls, t));
+		}
+
+		printf(" | ");
+	}
+	printf("\n");
+}
+#endif
 
 static void *getself(lua_State *ls, char *mt, char *f)
 {
@@ -42,6 +79,69 @@ static void destroy_userdata(void *data)
 	struct userdata *le_data = (struct userdata *)data;
 
 	le_data->valid = 0;
+}
+
+struct color {
+	char *name;
+	uint32_t val;
+};
+
+static uint32_t lookup_color(lua_State *ls, const char *s)
+{
+	static const struct color colors[] = {
+		{ "white", 0xFFFFFFFF },
+		{ "yellow", 0xFFFF00FF },
+		{ 0, 0 }
+	};
+	uint32_t color;
+
+	if(*s == '#') {
+		char *p;
+
+		color = strtol(++s, &p, 16);
+		if(*p != NULL)
+			luaL_error(ls, "Invalid color value");
+
+		return color;
+	} else {
+		char *str = strdup(s);
+		char *p = str;
+		int i = 0;
+
+		if(str == NULL)
+			luaL_error(ls, "malloc fail");
+
+		for(; *p; ++p)
+			*p = tolower(*p);
+
+		while(colors[i].name) {
+			if(strcmp(str, colors[i].name) == 0) {
+				color = colors[i].val;
+				free(str);
+				return color;
+			}
+			i++;
+		}
+		free(str);
+		luaL_error(ls, "Don't have color: %s", s);
+		return 0; /* Shut up compiler */
+	}
+}
+
+static void parse_color(lua_State *ls, char *name, uint32_t *dest)
+{
+	switch(lua_getfield(ls, 1, name)) {
+	case LUA_TSTRING:
+		if(lua_isnumber(ls, -1))
+	case LUA_TNUMBER:
+			*dest = lua_tonumber(ls, -1);
+		else
+			*dest = lookup_color(ls, lua_tostring(ls, -1));
+	case LUA_TNIL:
+		break;
+	default:
+		luaL_error(ls, "not a valid color");
+	}
 }
 
 static int api_text_set_text(lua_State *ls)
@@ -141,6 +241,7 @@ static int api_base_spawn(lua_State *ls)
 
 static int api_base_close(lua_State *ls)
 {
+	(void)ls;
 	menu_close(menu_global);
 
 	return 0;
@@ -149,6 +250,12 @@ static int api_base_close(lua_State *ls)
 static int api_base_set_theme(lua_State *ls)
 {
 	struct theme* theme = menu_get_theme(menu_global);
+
+	luaL_checktype(ls, 1, LUA_TTABLE);
+
+	parse_color(ls, "color", &theme->color);
+	parse_color(ls, "bg_color_from", &theme->color_from);
+	parse_color(ls, "bg_color_to", &theme->color_to);
 
 	return 0;
 }

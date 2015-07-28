@@ -13,13 +13,16 @@ struct theme {
 	uint32_t color;
 	uint32_t color_from;
 	uint32_t color_to;
+	uint32_t color_item;
 	char *font_family;
 	//cairo_font_slant_t font_slant;
 	//cairo_font_weight_t font_weight;
-	int padding[4]; /* top, right, bot, left */
+	int frame_padding[4]; /* top, right, bot, left */
+	int item_padding[4];
 	enum item_align align;
 	int radius; /* Negative value should curve in edges */
 	int min_width, max_width;
+	int text_size;
 	//int item_height;
 	//border*
 };
@@ -38,10 +41,12 @@ int frame_show(struct frame *);
 
 struct item_bar *item_bar_create(struct frame *parent, void (*)(void *),
 				 void *, int height);
+struct item_bar_theme *item_bar_get_theme(struct item_bar *);
 void item_bar_set_fill(struct item_bar *, double);
 
 struct item_text *item_text_create(struct frame *parent, void (*)(void *),
 				   void *, const char* text);
+struct item_text_theme *item_text_get_theme(struct item_text *);
 void item_text_set_text(struct item_text *item, const char *text);
 
 int api_init(struct menu *);

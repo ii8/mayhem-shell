@@ -56,31 +56,32 @@ struct item {
 	void (*api_destroy)(void *data);
 	void *api_data;
 	int height;
-	int padding[4];
-	// struct border*
 };
 
 static const struct theme default_theme = {
-	.color = 0xFF4791FF,
-	.color_from = 0xFF36A036,
-	.color_to = 0xFF363636,
+	.color = 0x4791FFFF,
+	.color_from = 0x14395EFF,
+	.color_to = 0x14537DFF,
+	.color_item = 0x00000000,
 	.font_family = "serif",
 	//.font_slant = CAIRO_FONT_SLANT_NORMAL,
 	//.font_weight = CAIRO_FONT_WEIGHT_NORMAL,
-	.padding = { 0, 0, 0, 0 },
+	.frame_padding = { 0, 0, 0, 0 },
+	.item_padding = { 0, 0, 0, 0 },
 	.align = ITEM_ALIGN_LEFT,
 	.radius = 10,
 	.min_width = 100,
-	.max_width = 400
+	.max_width = 400,
+	.text_size = 14
 };
 
 static void decimal_color(uint32_t color, double *r, double *g, double *b,
 			  double *a)
 {
-	*r = (double)(color & 0xFF) / 255;
-	*g = (double)(color >> 0x08 & 0xFF) / 255;
-	*b = (double)(color >> 0x10 & 0xFF) / 255;
-	*a = (double)(color >> 0x18 & 0xFF) / 255;
+	*a = (double)(color & 0xFF) / 255;
+	*b = (double)(color >> 0x08 & 0xFF) / 255;
+	*g = (double)(color >> 0x10 & 0xFF) / 255;
+	*r = (double)(color >> 0x18 & 0xFF) / 255;
 }
 
 static struct buffer *swap_buffers(struct frame *frame)
@@ -130,6 +131,10 @@ static void draw_bg(cairo_t *cr, struct frame *frame)
 	cairo_arc(cr, rad, frame->height - rad, rad, 0.5 * PI, PI);
 	cairo_close_path(cr);
 
+//	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+//	cairo_paint(cr);
+//	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
 	cairo_set_source(cr, bg);
 	cairo_fill(cr);
 	cairo_pattern_destroy(bg);
@@ -165,9 +170,6 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	cr = cairo_create(surface);
 	cairo_surface_destroy(surface);
 
-//	cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-//	cairo_paint(cr);
-//	cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 	draw_bg(cr, frame);
 	cairo_set_source_rgba(cr, 1, 1, 1, 1.0);
 	offset = 0;
@@ -214,8 +216,6 @@ static void item_init(struct item *item, struct frame *parent,
 
 	wl_list_insert(parent->items.prev, &item->link);
 
-	//memcpy(item->base.padding, parent->theme->padding, sizeof(int[4]));
-
 	parent->need_resize = 2;
 	parent->dirty = 1;
 
@@ -223,13 +223,37 @@ static void item_init(struct item *item, struct frame *parent,
 }
 
 /* Text item */
-struct item_text {
-	struct item base;
-	int width;
-	char *text, *font;
+struct item_text_theme {
+	char *font;
 	uint32_t color;
 	int size;
+	//int padding[4];
+	//struct border*
 };
+
+struct item_text {
+	struct item base;
+	struct item_text_theme *theme;
+	int width;
+	char *text;
+};
+
+struct item_text_theme *item_text_get_theme(struct item_text *item)
+{
+	if(item->theme == NULL) {
+		struct theme *p = item->base.parent->theme;
+
+		item->theme = malloc(sizeof(struct item_text_theme));
+		if(item->theme == NULL)
+			return NULL;
+
+		item->theme->font = p->font_family;
+		item->theme->color = p->color;
+		item->theme->size = p->text_size;
+	}
+
+	return item->theme;
+}
 
 void item_text_set_text(struct item_text *item, const char *text)
 {
@@ -260,8 +284,12 @@ static void item_text_destroy(struct item *item)
 
 	item->api_destroy(item->api_data);
 
+	if(item_text->theme != NULL) {
+		free(item_text->theme->font);
+		free(item_text->theme);
+	}
+
 	free(item_text->text);
-	free(item_text->font);
 
 	wl_list_remove(&item->link);
 	free(item);
@@ -313,12 +341,10 @@ struct item_text *item_text_create(struct frame *parent,
 }
 
 /* Bar item */
-struct item_bar {
-	struct item base;
+struct item_bar_theme {
 	uint32_t color;
-	int padding[4]; /* top, right, bot, left */
+	//int padding[4]; /* top, right, bot, left */
 	enum item_align align;
-	double fill;
 	/*
 	enum item_bar_style {
 		ITEM_BAR_STYLE_DOTTED = 0x01,
@@ -326,6 +352,28 @@ struct item_bar {
 	} style;
 	*/
 };
+
+struct item_bar {
+	struct item base;
+	struct item_bar_theme *theme;
+	double fill;
+};
+
+struct item_bar_theme *item_bar_get_theme(struct item_bar *item)
+{
+	if(item->theme == NULL) {
+		struct theme *p = item->base.parent->theme;
+
+		item->theme = malloc(sizeof(struct item_bar_theme));
+		if(item->theme == NULL)
+			return NULL;
+
+		item->theme->color = p->color;
+		item->theme->align = p->align;
+	}
+
+	return item->theme;
+}
 
 void item_bar_set_fill(struct item_bar *item, double fill)
 {
@@ -349,7 +397,12 @@ static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 
 static void item_bar_destroy(struct item *item)
 {
+	struct item_bar *i = (struct item_bar*)item;
 	item->api_destroy(item->api_data);
+
+	if(i->theme != NULL)
+		free(i->theme);
+
 	wl_list_remove(&item->link);
 	free(item);
 }
@@ -370,8 +423,6 @@ struct item_bar *item_bar_create(struct frame *parent,
 	item->base.destroy = item_bar_destroy;
 	item->base.height = height;
 
-	item->color = parent->theme->color;
-	item->align = ITEM_ALIGN_LEFT;
 	item->fill = 1;
 
 	item_init((struct item *)item, parent, callback, data);
