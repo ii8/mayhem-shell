@@ -139,6 +139,7 @@ skip:
 	segment = wl_container_of(buffer->link.next, segment, link);
 	if(~segment->flags & BUFFER_ACTIVE) {
 		segment->size += buffer->size;
+		segment->flags |= buffer->flags & BUFFER_LAST
 		wl_list_remove(&buffer->link);
 		free(buffer);
 	}

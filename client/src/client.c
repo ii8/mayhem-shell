@@ -21,6 +21,8 @@ struct display {
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
 	struct wl_shm *shm;
+	struct wl_seat *seat;
+	struct wl_pointer *pointer;
 	struct wl_output *output;//temporary
 	int output_width, output_height;
 	struct ms_menu *ms;
@@ -140,12 +142,40 @@ static void shm_format(void *data, struct wl_shm *wl_shm, uint32_t format)
 	d->formats |= (1 << format);
 }
 
-struct wl_shm_listener shm_listener = {
+static struct wl_shm_listener const shm_listener = {
 	shm_format
 };
 
+void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
+			      uint32_t capabilities)
+{
+	struct display *d = data;
+
+	if(capabilities & WL_SEAT_CAPABILITY_POINTER) {
+		printf("have pointer\n");
+		if(d->pointer)
+			return;
+		d->pointer = wl_seat_get_pointer(d->seat);
+		wl_pointer_add_listener(d->pointer, menu_get_pointer_listener(),
+					NULL);
+	} else if(d->pointer) {
+		printf("no pointer\n");
+		wl_pointer_release(d->pointer);
+	}
+}
+
+void seat_handle_name(void *data, struct wl_seat *wl_seat, const char *name)
+{
+}
+
+static struct wl_seat_listener const seat_listener = {
+	seat_handle_capabilities,
+	seat_handle_name
+};
+
 static void registry_handle_global(void *data, struct wl_registry *registry,
-		       uint32_t id, const char *interface, uint32_t version)
+				   uint32_t id, const char *interface,
+				   uint32_t version)
 {
 	struct display *d = data;
 
@@ -163,10 +193,14 @@ static void registry_handle_global(void *data, struct wl_registry *registry,
 					     &wl_output_interface, 2);
 
 		wl_output_add_listener(d->output, &output_listener, d);
-	} else if(!strcmp(interface, "ms_menu")) {
+	} else if(strcmp(interface, "ms_menu") == 0) {
 		printf("binding ms_menu\n");
 		d->ms = wl_registry_bind(registry, id, &ms_menu_interface, 1);
 		ms_menu_add_listener(d->ms, &ms_listener, d);
+	} else if(strcmp(interface, "wl_seat") == 0) {
+		printf("binding wl_seat\n");
+		d->seat = wl_registry_bind(registry, id, &wl_seat_interface, 1);
+		wl_seat_add_listener(d->seat, &seat_listener, d);
 	}
 }
 
@@ -222,6 +256,8 @@ static struct display *display_create(void)
 err:
 	if(display->shm)
 		wl_shm_destroy(display->shm);
+	if(display->seat)
+		wl_seat_destroy(display->seat);
 	if(display->compositor)
 		wl_compositor_destroy(display->compositor);
 	wl_registry_destroy(display->registry);

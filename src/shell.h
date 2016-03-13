@@ -71,6 +71,7 @@ struct mayhem_shell {
 
 	struct wl_listener idle_listener;
 	struct wl_listener wake_listener;
+	struct wl_listener transform_listener;
 	struct wl_listener destroy_listener;
 
 	struct weston_layer background_layer;
