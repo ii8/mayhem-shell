@@ -17,7 +17,7 @@ WARNMORE=$(WARNS) -Wshadow -Wpointer-arith -Wcast-qual\
 	-Wunsuffixed-float-constants -Winit-self -Woverlength-strings
 
 ifeq ($(DEBUG), true)
-CFLAGS+=-DDEBUG -g -Og $(WARNS)
+CFLAGS+=-DDEBUG -g -Og $(WARNS) -Wno-unused-parameter
 else
 CFLAGS+=-DNDEBUG -O2 -Wno-missing-field-initializers -Wno-unused-parameter
 endif

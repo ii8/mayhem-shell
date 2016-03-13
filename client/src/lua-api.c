@@ -99,7 +99,7 @@ static uint32_t lookup_color(lua_State *ls, const char *s)
 		char *p;
 
 		color = strtol(++s, &p, 16);
-		if(*p != NULL)
+		if(*p != '\0')
 			luaL_error(ls, "Invalid color value");
 
 		return color;
@@ -199,7 +199,7 @@ static int api_menu_add_text(lua_State *ls)
 	struct userdata *data;
 	struct frame *frame = getself(ls, META_MENU, "add_text");
 
-	char *text = luaL_checkstring(ls, 2);
+	char const *text = luaL_checkstring(ls, 2);
 
 	data = lua_newuserdata(ls, sizeof(*data));
 	luaL_setmetatable(ls, META_TEXT);

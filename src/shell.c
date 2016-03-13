@@ -309,11 +309,10 @@ static void shell_grab_start(struct shell_grab *grab,
 	weston_pointer_start_grab(pointer, &grab->grab);
 	if(shell->child.mayhem_shell) {
 		ms_menu_send_grab_cursor(shell->child.mayhem_shell, cursor);
-		printf("not setting grab focus because no grab_surface\n");
-		//weston_pointer_set_focus(pointer,
-		//			 get_default_view(shell->grab_surface),
-		//			 wl_fixed_from_int(0),
-		//			 wl_fixed_from_int(0));
+		weston_pointer_set_focus(pointer,
+					 get_default_view(shell->grab_surface),
+					 wl_fixed_from_int(0),
+					 wl_fixed_from_int(0));
 	}
 }
 
@@ -2230,8 +2229,6 @@ static void set_minimized(struct weston_surface *surface)
 {
 	struct shell_surface *shsurf;
 	struct workspace *current_ws;
-	struct weston_seat *seat;
-	struct weston_surface *focus;
 	struct weston_view *view;
 
 	view = get_default_view(surface);
@@ -2806,7 +2803,7 @@ add_popup_grab(struct shell_surface *shsurf,
 	    ((top_surface == NULL && !shell_surface_is_xdg_surface(parent)) ||
 	     (top_surface != NULL && parent != top_surface))) {
 		wl_resource_post_error(shsurf->owner->resource,
-				       XDG_POPUP_ERROR_NOT_THE_TOPMOST_POPUP,
+				       XDG_SHELL_ERROR_NOT_THE_TOPMOST_POPUP,
 				       "xdg_popup was not created on the "
 				       "topmost popup");
 		return -1;
@@ -2851,7 +2848,7 @@ remove_popup_grab(struct shell_surface *shsurf)
 	if (shell_surface_is_xdg_popup(shsurf) &&
 	    get_top_popup(shseat) != shsurf) {
 		wl_resource_post_error(shsurf->resource,
-				       XDG_POPUP_ERROR_NOT_THE_TOPMOST_POPUP,
+				       XDG_SHELL_ERROR_NOT_THE_TOPMOST_POPUP,
 				       "xdg_popup was destroyed while it was "
 				       "not the topmost popup.");
 		return;
@@ -3490,20 +3487,8 @@ create_xdg_popup(struct shell_client *owner, void *shell,
 		 uint32_t serial,
 		 int32_t x, int32_t y)
 {
-	struct shell_surface *shsurf, *parent_shsurf;
+	struct shell_surface *shsurf;
 
-	/* Verify that we are creating the top most popup when mapping,
-	 * as its not until then we know whether it was mapped as most
-	 * top level or not. */
-
-	parent_shsurf = get_shell_surface(parent);
-	if (!shell_surface_is_xdg_popup(parent_shsurf) &&
-	    !shell_surface_is_xdg_surface(parent_shsurf)) {
-		wl_resource_post_error(owner->resource,
-				       XDG_POPUP_ERROR_INVALID_PARENT,
-				       "xdg_popup parent was invalid");
-		return NULL;
-	}
 
 	shsurf = create_common_surface(owner, shell, surface, client);
 	if (!shsurf)
@@ -3670,7 +3655,8 @@ static int background_get_label(struct weston_surface *surface, char *buf, size_
 			surface->output->name);
 }
 
-static void background_configure(struct weston_surface *es, int32_t sx, int32_t sy)
+static void background_configure(struct weston_surface *es,
+				 int32_t sx, int32_t sy)
 {
 	printf("server s configuring bg\n");
 	struct mayhem_shell *shell = es->configure_private;
@@ -3681,21 +3667,7 @@ static void background_configure(struct weston_surface *es, int32_t sx, int32_t 
 	configure_static_view(view, &shell->background_layer);
 }
 
-static void ms_send_configure(struct weston_surface *surface, int32_t width,
-			      int32_t height)
-{
-	struct shell_surface *shsurf = get_shell_surface(surface);
-
-	//Must implement properly
-	/*
-	ms_menu_send_configure(struct wl_resource *resource_, uint32_t edges,
-			       struct wl_resource *surface, int32_t width,
-			       int32_t height);
-	*/
-}
-
 static const struct weston_shell_client ms_menu_client = {
-	ms_send_configure,
 	NULL
 };
 
@@ -3745,11 +3717,6 @@ static void ms_setbg(struct wl_client *client,
 	weston_surface_set_label_func(surface, background_get_label);
 	surface->output = wl_resource_get_user_data(output_resource);
 	view->output = surface->output;
-	ms_menu_send_configure(resource, 0,
-			       surface_resource,
-			       surface->output->width,
-			       surface->output->height);
-
 
 	//TODO REMOVE
 	//ms_menu_send_spawn(shell->child.mayhem_shell, 0, 0);
@@ -4020,8 +3987,8 @@ static void do_zoom(struct weston_seat *seat, uint32_t time, uint32_t key,
 }
 
 static void
-zoom_axis_binding(struct weston_pointer *pointer, uint32_t time, uint32_t axis,
-		  struct weston_pointer_axis_event *event)
+zoom_axis_binding(struct weston_pointer *pointer, uint32_t time,
+		  struct weston_pointer_axis_event *event, void *data)
 {
 	do_zoom(pointer->seat, time, 0, event->axis, event->value);
 }
@@ -4041,8 +4008,8 @@ static void terminate_binding(struct weston_keyboard *keyboard, uint32_t time,
 	wl_display_terminate(compositor->wl_display);
 }
 
-static void exec_binding(struct weston_seat *seat, uint32_t time, uint32_t key,
-			 void *data)
+static void exec_binding(struct weston_keyboard *keyboard, uint32_t time,
+			 uint32_t key, void *data)
 {
 	/*
 	char *c;
@@ -5177,13 +5144,15 @@ static void workspace_down_binding(struct weston_keyboard *keyboard, uint32_t ti
 	change_workspace(shell, new_index);
 }
 
-static void workspace_axis_binding(struct weston_pointer *pointer, uint32_t time,
-				   uint32_t axis, wl_fixed_t value, void *data)
+static void workspace_axis_binding(struct weston_pointer *pointer,
+				   uint32_t time,
+				   struct weston_pointer_axis_event *event,
+				   void *data)
 {
 	struct mayhem_shell *shell = data;
 	int new_index = shell->workspaces.current;
 
-	new_index += value>0?1:-1;
+	new_index += event->value>0?1:-1;
 	if(new_index < 0)
 		new_index = shell->workspaces.num-1;
 	else if((unsigned)new_index >= shell->workspaces.num)

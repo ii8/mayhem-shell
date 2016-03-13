@@ -614,8 +614,7 @@ void menu_destroy(struct menu *menu)
 	free(menu);
 }
 
-static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
-			  struct wl_surface *surf, wl_fixed_t x, wl_fixed_t y)
+void menu_event_pointer_enter(struct wl_surface *surf)
 {
 	struct frame *frame = wl_surface_get_user_data(surf);
 
@@ -625,8 +624,7 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 	frame->pfocus = 1;
 }
 
-static void pointer_leave(void *data, struct wl_pointer *p, uint32_t serial,
-			  struct wl_surface *surf)
+void menu_event_pointer_leave(struct wl_surface *surf)
 {
 	struct frame *frame = wl_surface_get_user_data(surf);
 
@@ -634,55 +632,4 @@ static void pointer_leave(void *data, struct wl_pointer *p, uint32_t serial,
 		return;
 
 	frame->pfocus = 0;
-}
-
-static void pointer_motion(void *data, struct wl_pointer *p, uint32_t time,
-			   wl_fixed_t x, wl_fixed_t y)
-{
-}
-
-static void pointer_button(void *data, struct wl_pointer *p, uint32_t serial,
-			   uint32_t time, uint32_t button, uint32_t state)
-{
-}
-
-static void pointer_axis(void *data, struct wl_pointer *p, uint32_t time,
-			 uint32_t axis, wl_fixed_t value)
-{
-}
-
-static void pointer_frame(void *data, struct wl_pointer *p)
-{
-}
-
-static void pointer_axis_source(void *data, struct wl_pointer *p,
-				uint32_t axis_source)
-{
-}
-
-static void pointer_axis_stop(void *data, struct wl_pointer *p, uint32_t time,
-			      uint32_t axis)
-{
-}
-
-static void pointer_axis_discrete(void *data, struct wl_pointer *p,
-				  uint32_t axis, int32_t discrete)
-{
-}
-
-static struct wl_pointer_listener const pointer_listener = {
-	.enter = pointer_enter,
-	.leave = pointer_leave,
-	.motion = pointer_motion,
-	.button = pointer_button,
-	.axis = pointer_axis,
-	.frame = pointer_frame,
-	.axis_source = pointer_axis_source,
-	.axis_stop = pointer_axis_stop,
-	.axis_discrete = pointer_axis_discrete
-};
-
-struct wl_pointer_listener const *menu_get_pointer_listener(void)
-{
-	return &pointer_listener;
 }

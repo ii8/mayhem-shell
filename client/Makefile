@@ -2,7 +2,7 @@
 include ../config.mk
 
 CFLAGS+=-I/usr/include/cairo -I../protocol
-LDFLAGS=-lwayland-client -lcairo -lrt
+LDFLAGS=-lwayland-client -lwayland-cursor -lcairo -lrt
 SOURCES=\
 	src/client.c\
 	src/menu.c\
