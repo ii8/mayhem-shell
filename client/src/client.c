@@ -28,7 +28,7 @@ struct display {
 	struct ms_menu *ms;
 	struct menu *menu;
 
-	uint32_t formats;
+	int has_argb;
 
 	struct wl_cursor_theme *cursor_theme;
 	struct wl_surface *grab_surface;
@@ -215,10 +215,10 @@ static void output_destroy(struct output *o)
 
 static void shm_format(void *data, struct wl_shm *wl_shm, uint32_t format)
 {
-	printf("format: %x\n", format);
 	struct display *d = data;
 
-	d->formats |= (1 << format);
+	if(format == WL_SHM_FORMAT_ARGB8888)
+	   d->has_argb = 1;
 }
 
 static struct wl_shm_listener const shm_listener = {
@@ -259,6 +259,8 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 
 	if(surf == d->grab_surface)
 		set_cursor(d, d->cursors[d->grab_cursor], serial);
+	else
+		set_cursor(d, d->cursors[CURSOR_LEFT_PTR], serial);
 
 	menu_event_pointer_enter(surf);
 }
@@ -405,7 +407,6 @@ static struct display *display_create(void)
 
 	wl_list_init(&display->outputs);
 
-	display->formats = 0;
 	display->registry = wl_display_get_registry(display->display);
 	wl_registry_add_listener(display->registry, &registry_listener,
 				 display);
@@ -418,7 +419,7 @@ static struct display *display_create(void)
 
 	wl_display_roundtrip(display->display);
 
-	if(!(display->formats & (1 << WL_SHM_FORMAT_ARGB8888))) {
+	if(!display->has_argb) {
 		fprintf(stderr, "No ARGB32, Compositor sucks!\n");
 		goto err;
 	}
@@ -484,7 +485,6 @@ static void display_destroy(struct display *display)
 
 	wl_cursor_theme_destroy(display->cursor_theme);
 	free(display->cursors);
-	pool_destroy(display->pool);
 
 	wl_surface_destroy(display->grab_surface);
 	wl_surface_destroy(display->pointer_surface);
@@ -494,6 +494,8 @@ static void display_destroy(struct display *display)
 
 	wl_list_for_each_safe(o, tmp, &display->outputs, link)
 		output_destroy(o);
+
+	pool_destroy(display->pool);
 
 	wl_registry_destroy(display->registry);
 	wl_display_flush(display->display);

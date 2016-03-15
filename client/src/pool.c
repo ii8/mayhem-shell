@@ -53,6 +53,8 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 				buffer = segment;
 			} else {
 				buffer = calloc(1, sizeof *buffer);
+				if(!buffer)
+					return NULL;
 				wl_list_insert(&segment->link, &buffer->link);
 				buffer->offset = segment->offset;
 				buffer->size = size;
@@ -66,6 +68,8 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 
 	if(wl_list_empty(&pool->buffers)) {
 		buffer = calloc(1, sizeof *buffer);
+		if(!buffer)
+			return NULL;
 		buffer->flags |= BUFFER_FIRST;
 		assert(buffer->offset == 0);
 	} else {
@@ -78,6 +82,8 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 			goto grow;
 		} else {
 			buffer = calloc(1, sizeof *buffer);
+			if(!buffer)
+				return NULL;
 			segment->flags &= ~BUFFER_LAST;
 			buffer->offset = segment->offset + segment->size;
 		}
