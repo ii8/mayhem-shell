@@ -258,9 +258,9 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 	struct display *d = data;
 
 	if(surf == d->grab_surface)
-		set_cursor(d, d->cursors[d->grab_cursor], serial);
-	else
-		set_cursor(d, d->cursors[CURSOR_LEFT_PTR], serial);
+		return set_cursor(d, d->cursors[d->grab_cursor], serial);
+
+	set_cursor(d, d->cursors[CURSOR_LEFT_PTR], serial);
 
 	menu_event_pointer_enter(surf);
 }

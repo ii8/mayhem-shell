@@ -81,6 +81,15 @@ static void destroy_userdata(void *data)
 	le_data->valid = 0;
 }
 
+static void fire_event(void *data)
+{
+	char *f = data;
+
+	lua_getglobal(ls_global, f);
+	if(lua_pcall(ls_global, 0, 0, 0))
+		luaL_error(ls_global, "failed to call '%s'", f);
+}
+
 struct color {
 	char *name;
 	uint32_t val;
@@ -214,16 +223,23 @@ static int api_menu_add_bar(lua_State *ls)
 {
 	struct userdata *data;
 	struct frame *frame = getself(ls, META_MENU, "add_bar");
-
-	luaL_checknumber(ls, 2);
+	lua_Number n = luaL_checknumber(ls, 2);
 
 	data = lua_newuserdata(ls, sizeof(*data));
 	luaL_setmetatable(ls, META_BAR);
 	data->valid = 1;
-	data->data = item_bar_create(frame, destroy_userdata, data,
-				     lua_tonumber(ls, 2));
+	data->data = item_bar_create(frame, destroy_userdata, data, n);
 
 	return 1;
+}
+
+static int api_menu_on_enter(lua_State *ls)
+{
+	struct frame *frame = getself(ls, META_MENU, "add_bar");
+	char *cb = strdup(luaL_checkstring(ls, 2));
+
+	frame_register_event(frame, EVENT_ENTER, fire_event, cb);
+	return 0;
 }
 
 static int api_base_spawn(lua_State *ls)
@@ -273,6 +289,7 @@ static const luaL_Reg api_menu[] = {
 	{ "set_theme", api_menu_set_theme },
 	{ "add_text", api_menu_add_text },
 	{ "add_bar", api_menu_add_bar },
+	{ "on_enter", api_menu_on_enter },
 	{ 0, 0 }
 };
 

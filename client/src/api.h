@@ -2,6 +2,13 @@
 #ifndef API_H
 #define API_H
 
+enum event_type {
+	EVENT_NONE,
+	EVENT_ENTER,
+	EVENT_LEAVE,
+	EVENT_CLICK
+};
+
 enum item_align {
 	ITEM_ALIGN_LEFT = 0x01,
 	ITEM_ALIGN_RIGHT = 0x02,
@@ -36,6 +43,10 @@ struct theme *menu_get_theme(struct menu *menu);
 struct frame *frame_create(struct menu *menu, struct frame *parent,
 			   void (*)(void *), void *);
 void frame_destroy(struct frame *frame);
+void frame_register_event(struct frame *,
+			  enum event_type,
+			  void (*)(void *),
+			  void *);
 struct theme *frame_get_theme(struct frame *frame);
 int frame_show(struct frame *);
 

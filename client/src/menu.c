@@ -15,6 +15,125 @@
 
 #define PI 3.141592654
 
+struct callback {
+	struct wl_list link;
+	void (*callback)(void *);
+	void *data;
+};
+
+struct event {
+	int red;
+	struct event *link[2];
+	enum event_type type;
+	struct wl_list callbacks;
+};
+
+static struct event leaf = { 0, { NULL, NULL }, EVENT_NONE, { NULL, NULL } };
+
+static void flip(struct event *event)
+{
+	event->red = 1;
+	event->link[0]->red = 0;
+	event->link[1]->red = 0;
+}
+
+static struct event *rotate(struct event *event, int dir)
+{
+	struct event *tmp = event->link[!dir];
+
+	event->link[!dir] = tmp->link[dir];
+	tmp->link[dir] = event;
+
+	tmp->red = 0;
+	event->red = 1;
+
+	return tmp;
+}
+
+static struct event *rotate2(struct event *event, int dir)
+{
+	event->link[!dir] = rotate(event->link[!dir], !dir);
+
+	return rotate(event, dir);
+}
+
+static struct event *event_create(enum event_type event, int red)
+{
+	struct event *e;
+
+	e = malloc(sizeof *e);
+	e->link[0] = e->link[1] = &leaf;
+	e->red = red;
+	e->type = event;
+	wl_list_init(&e->callbacks);
+	return e;
+}
+
+static void event_register(struct event **root,
+			   enum event_type event,
+			   struct callback *cb)
+{
+	struct event fake = { 0, { NULL, *root }, EVENT_NONE, { NULL, NULL } };
+	struct event *i = *root;
+	struct event *p, *g, *gg;
+	int dir = 0, last;
+
+	if(*root == &leaf) {
+		*root = event_create(event, 0);
+		wl_list_insert(&(*root)->callbacks, &cb->link);
+		return;
+	}
+
+	gg = &fake;
+	p = g = &leaf;
+
+	for(; ; ) {
+		if(i == &leaf)
+			p->link[dir] = i = event_create(event, 1);
+		else if(i->link[0]->red && i->link[1]->red)
+			flip(i);
+
+		if(i->red && p->red) {
+			int d = gg->link[1] == g;
+
+			if(i == p->link[last])
+				gg->link[d] = rotate(g, !last);
+			else
+				gg->link[d] = rotate2(g, !last);
+		}
+
+		if(event == i->type) {
+			wl_list_insert(&i->callbacks, &cb->link);
+			break;
+		}
+
+		last = dir;
+		dir = i->type < event;
+
+		if(g != &leaf)
+			gg = g;
+		g = p;
+		p = i;
+		i = i->link[dir];
+	}
+	*root = fake.link[1];
+	(*root)->red = 0;
+}
+
+static void event_fire(struct event *n, enum event_type ev)
+{
+	while(n) {
+		if(n->type == ev) {
+			struct callback *cb;
+
+			wl_list_for_each(cb, &n->callbacks, link)
+				cb->callback(cb->data);
+			return;
+		}
+		n = n->link[n->type < ev];
+	}
+}
+
 struct frame {
 	struct wl_list link;
 	int width, height;
@@ -33,6 +152,7 @@ struct frame {
 	void *api_data;
 	int api_focus;
 	int pfocus;
+	struct event *event;
 };
 
 struct menu {
@@ -478,6 +598,19 @@ struct theme *frame_get_theme(struct frame *frame)
 	return frame->theme;
 }
 
+void frame_register_event(struct frame *frame,
+			  enum event_type ev,
+			  void (*cb)(void *),
+			  void *data)
+{
+	struct callback *callback;
+
+	callback = malloc(sizeof *callback);
+	callback->callback = cb;
+	callback->data = data;
+	event_register(&frame->event, ev, callback);
+}
+
 struct frame *frame_create(struct menu *menu,
 			   struct frame *parent,
 			   void (*callback)(void *),
@@ -498,6 +631,7 @@ struct frame *frame_create(struct menu *menu,
 	frame->theme = menu->theme;
 
 	frame->width = frame->theme->min_width;
+	frame->event = &leaf;
 
 	if(parent)
 		wl_list_insert(&parent->children, &frame->link);
@@ -622,6 +756,7 @@ void menu_event_pointer_enter(struct wl_surface *surf)
 		return;
 
 	frame->pfocus = 1;
+	event_fire(frame->event, EVENT_ENTER);
 }
 
 void menu_event_pointer_leave(struct wl_surface *surf)

@@ -1750,6 +1750,8 @@ ping_handler(struct weston_surface *surface, uint32_t serial)
 		return;
 	if (shsurf->surface == shsurf->shell->grab_surface)
 		return;
+	if (shsurf->type == SHELL_SURFACE_MENU)
+		return;
 
 	handle_xdg_ping(shsurf, serial);
 }
