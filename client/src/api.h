@@ -46,6 +46,7 @@ void frame_destroy(struct frame *frame);
 void frame_register_event(struct frame *,
 			  enum event_type,
 			  void (*)(void *),
+			  void (*)(void *),
 			  void *);
 struct theme *frame_get_theme(struct frame *frame);
 int frame_show(struct frame *);
@@ -60,8 +61,10 @@ struct item_text *item_text_create(struct frame *parent, void (*)(void *),
 struct item_text_theme *item_text_get_theme(struct item_text *);
 void item_text_set_text(struct item_text *item, const char *text);
 
-int api_init(struct menu *);
-void api_finish(void);
+void throw(char const *e);
+
+void *api_init(struct menu *);
+void api_finish(void *);
 
 #endif
 

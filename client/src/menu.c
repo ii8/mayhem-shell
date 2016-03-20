@@ -18,6 +18,7 @@
 struct callback {
 	struct wl_list link;
 	void (*callback)(void *);
+	void (*destroy)(void *);
 	void *data;
 };
 
@@ -134,6 +135,24 @@ static void event_fire(struct event *n, enum event_type ev)
 	}
 }
 
+static void event_destroy(struct event *root)
+{
+	struct callback *cb, *tmp;
+
+	if(root->link[0] != &leaf)
+		event_destroy(root->link[0]);
+
+	if(root->link[1] != &leaf)
+		event_destroy(root->link[1]);
+
+	wl_list_for_each_safe(cb, tmp, &root->callbacks, link) {
+		cb->destroy(cb->data);
+		wl_list_remove(&cb->link);
+		free(cb);
+	}
+	free(root);
+}
+
 struct frame {
 	struct wl_list link;
 	int width, height;
@@ -161,6 +180,7 @@ struct menu {
 	struct ms_menu *ms;
 	struct theme *theme;
 	struct wl_list top_frames;
+	void *api_context;
 };
 
 enum item_type {
@@ -332,10 +352,8 @@ static void item_init(struct item *item, struct frame *parent,
 {
 	item->parent = parent;
 
-	if(api_destroy) {
-		item->api_destroy = api_destroy;
-		item->api_data = api_data;
-	}
+	item->api_destroy = api_destroy;
+	item->api_data = api_data;
 
 	wl_list_insert(parent->items.prev, &item->link);
 
@@ -405,7 +423,8 @@ static void item_text_destroy(struct item *item)
 {
 	struct item_text *item_text = (struct item_text *)item;
 
-	item->api_destroy(item->api_data);
+	if(item->api_destroy)
+		item->api_destroy(item->api_data);
 
 	if(item_text->theme != NULL) {
 		free(item_text->theme->font);
@@ -521,7 +540,9 @@ static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 static void item_bar_destroy(struct item *item)
 {
 	struct item_bar *i = (struct item_bar*)item;
-	item->api_destroy(item->api_data);
+
+	if(item->api_destroy)
+		item->api_destroy(item->api_data);
 
 	if(i->theme != NULL)
 		free(i->theme);
@@ -601,12 +622,14 @@ struct theme *frame_get_theme(struct frame *frame)
 void frame_register_event(struct frame *frame,
 			  enum event_type ev,
 			  void (*cb)(void *),
+			  void (*destroy)(void *),
 			  void *data)
 {
 	struct callback *callback;
 
 	callback = malloc(sizeof *callback);
 	callback->callback = cb;
+	callback->destroy = destroy;
 	callback->data = data;
 	event_register(&frame->event, ev, callback);
 }
@@ -641,10 +664,8 @@ struct frame *frame_create(struct menu *menu,
 	wl_list_init(&frame->children);
 	wl_list_init(&frame->items);
 
-	if(callback != NULL) {
-		frame->api_destroy = callback;
-		frame->api_data = data;
-	}
+	frame->api_destroy = callback;
+	frame->api_data = data;
 
 	return frame;
 }
@@ -654,15 +675,13 @@ void frame_destroy(struct frame *frame)
 	struct frame *child, *tmp;
 	struct item *item, *itemp;
 
-	wl_list_for_each_safe(child, tmp, &frame->children, link) {
-		printf("descending more\n");
+	wl_list_for_each_safe(child, tmp, &frame->children, link)
 		frame_destroy(child);
-	}
 
-	wl_list_for_each_safe(item, itemp, &frame->items, link) {
-		printf("clearing item\n");
+	wl_list_for_each_safe(item, itemp, &frame->items, link)
 		item->destroy(item);
-	}
+
+	event_destroy(frame->event);
 
 	if(frame->api_destroy)
 		frame->api_destroy(frame->api_data);
@@ -690,10 +709,8 @@ void menu_close(struct menu *menu)
 {
 	struct frame *child, *tmp;
 
-	wl_list_for_each_safe(child, tmp, &menu->top_frames, link) {
-		printf("descending into child\n");
+	wl_list_for_each_safe(child, tmp, &menu->top_frames, link)
 		frame_destroy(child);
-	}
 }
 
 struct theme *menu_get_theme(struct menu *menu)
@@ -724,7 +741,8 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	if(menu->theme->font_family == NULL)
 		goto err_font;
 
-	if(api_init(menu) < 0)
+	menu->api_context = api_init(menu);
+	if(!menu->api_context)
 		goto err;
 
 	return menu;
@@ -739,10 +757,15 @@ err_menu:
 	return NULL;
 }
 
+void throw(char const *e)
+{
+	printf("%s\n", e);
+}
+
 void menu_destroy(struct menu *menu)
 {
 	menu_close(menu);
-	api_finish();
+	api_finish(menu->api_context);
 	free(menu->theme->font_family);
 	free(menu->theme);
 	free(menu);

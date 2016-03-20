@@ -20,15 +20,10 @@ struct userdata {
 	void *data;
 };
 
-static jmp_buf panic_env;
-static struct menu *menu_global;
-static lua_State *ls_global;
-
-static int panic(lua_State *ls)
-{
-	(void)ls;
-	longjmp(panic_env, 1);
-}
+struct cb_data {
+	lua_State *ls;
+	char *f;
+};
 
 #ifndef NDEBUG
 static void dump_stack(lua_State *ls)
@@ -63,6 +58,27 @@ static void dump_stack(lua_State *ls)
 }
 #endif
 
+static void throw_error(lua_State *ls)
+{
+	char const *e = lua_tostring(ls, -1);
+
+	if(e)
+		throw(e);
+	else
+		throw("Error without message");
+}
+
+static struct menu *getmenu(lua_State *ls)
+{
+	struct menu *menu;
+
+	lua_pushlightuserdata(ls, ls);
+	lua_rawget(ls, LUA_REGISTRYINDEX);
+	menu = lua_touserdata(ls, -1);
+	lua_pop(ls, 1);
+	return menu;
+}
+
 static void *getself(lua_State *ls, char *mt, char *f)
 {
 	struct userdata *data = luaL_checkudata(ls, 1, mt);
@@ -83,11 +99,19 @@ static void destroy_userdata(void *data)
 
 static void fire_event(void *data)
 {
-	char *f = data;
+	struct cb_data *cb = data;
 
-	lua_getglobal(ls_global, f);
-	if(lua_pcall(ls_global, 0, 0, 0))
-		luaL_error(ls_global, "failed to call '%s'", f);
+	lua_getglobal(cb->ls, cb->f);
+	if(lua_pcall(cb->ls, 0, 0, 0))
+		throw_error(cb->ls);
+}
+
+static void destroy_event(void *data)
+{
+	struct cb_data *cb = data;
+
+	free(cb->f);
+	free(cb);
 }
 
 struct color {
@@ -132,8 +156,7 @@ static uint32_t lookup_color(lua_State *ls, const char *s)
 			i++;
 		}
 		free(str);
-		luaL_error(ls, "Don't have color: %s", s);
-		return 0; /* Shut up compiler */
+		return luaL_error(ls, "Don't have color: %s", s);
 	}
 }
 
@@ -193,7 +216,6 @@ static int api_menu_close(lua_State *ls)
 	struct frame *frame = getself(ls, META_MENU, "close");
 
 	frame_destroy(frame);
-
 	return 0;
 }
 
@@ -235,37 +257,48 @@ static int api_menu_add_bar(lua_State *ls)
 
 static int api_menu_on_enter(lua_State *ls)
 {
-	struct frame *frame = getself(ls, META_MENU, "add_bar");
-	char *cb = strdup(luaL_checkstring(ls, 2));
+	struct cb_data *cb_data;
+	struct frame *frame = getself(ls, META_MENU, "on_enter");
+	char *f = strdup(luaL_checkstring(ls, 2));
 
-	frame_register_event(frame, EVENT_ENTER, fire_event, cb);
+	cb_data = malloc(sizeof *cb_data);
+	cb_data->ls = ls;
+	cb_data->f = f;
+
+	frame_register_event(frame,
+			     EVENT_ENTER,
+			     fire_event,
+			     destroy_event,
+			     cb_data);
 	return 0;
 }
 
 static int api_base_spawn(lua_State *ls)
 {
 	struct userdata *data;
+	struct menu *menu = getmenu(ls);
 
 	data = lua_newuserdata(ls, sizeof(*data));
 	luaL_setmetatable(ls, META_MENU);
 
 	data->valid = 1;
-	data->data = frame_create(menu_global, NULL, destroy_userdata, data);
+	data->data = frame_create(menu, NULL, destroy_userdata, data);
 
 	return 1;
 }
 
 static int api_base_close(lua_State *ls)
 {
-	(void)ls;
-	menu_close(menu_global);
+	struct menu *menu = getmenu(ls);
 
+	menu_close(menu);
 	return 0;
 }
 
 static int api_base_set_theme(lua_State *ls)
 {
-	struct theme* theme = menu_get_theme(menu_global);
+	struct menu *menu = getmenu(ls);
+	struct theme* theme = menu_get_theme(menu);
 
 	luaL_checktype(ls, 1, LUA_TTABLE);
 
@@ -328,17 +361,13 @@ static int luaopen_mayhem(lua_State *ls)
 	return 1;
 }
 
-int api_init(struct menu *menu)
+void *api_init(struct menu *menu)
 {
 	lua_State *ls = luaL_newstate();
 	luaL_openlibs(ls);
 
-	menu_global = menu;
-
-	if(setjmp(panic_env))
-		goto err;
-
-	lua_atpanic(ls, panic);
+	lua_pushlightuserdata(ls, menu);
+	lua_rawsetp(ls, LUA_REGISTRYINDEX, ls);
 
 	luaL_requiref(ls, MODULE_NAME, luaopen_mayhem, 1);
 	lua_pop(ls, 1);
@@ -353,24 +382,17 @@ int api_init(struct menu *menu)
 	if(lua_pcall(ls, 0, 0, 0))
 		goto err;
 
-	ls_global = ls;
-	return 0;
+	return ls;
 
 err:
-	if(lua_isstring(ls, -1))
-		printf("Lua error: %s\n", lua_tostring(ls, -1));
-	else
-		printf("Error without message");
+	throw_error(ls);
 
 	menu_close(menu);
-	menu_global = NULL;
 	lua_close(ls);
-	return -1;
+	return NULL;
 }
 
-void api_finish(void)
+void api_finish(void *context)
 {
-	menu_global = NULL;
-	lua_close(ls_global);
+	lua_close(context);
 }
-
