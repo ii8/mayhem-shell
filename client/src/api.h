@@ -36,6 +36,7 @@ struct theme {
 
 //struct frame;
 struct menu;
+struct item;
 
 void menu_close(struct menu *);
 struct theme *menu_get_theme(struct menu *menu);
@@ -48,8 +49,15 @@ void frame_register_event(struct frame *,
 			  void (*)(void *),
 			  void (*)(void *),
 			  void *);
+void frame_remove_events(struct frame *frame, enum event_type ev);
 struct theme *frame_get_theme(struct frame *frame);
 int frame_show(struct frame *);
+
+void item_register_event(struct item *,
+			 enum event_type,
+			 void (*)(void *),
+			 void (*)(void *),
+			 void *);
 
 struct item_bar *item_bar_create(struct frame *parent, void (*)(void *),
 				 void *, int height);

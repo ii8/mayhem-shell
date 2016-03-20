@@ -22,8 +22,15 @@ struct callback {
 	void *data;
 };
 
+enum event_state {
+	EVENT_RED = 1,
+	EVENT_ACTIVE = 2,
+	EVENT_OFF = 4,
+	EVENT_DEAD = 8
+};
+
 struct event {
-	int red;
+	enum event_state state;
 	struct event *link[2];
 	enum event_type type;
 	struct wl_list callbacks;
@@ -33,9 +40,9 @@ static struct event leaf = { 0, { NULL, NULL }, EVENT_NONE, { NULL, NULL } };
 
 static void flip(struct event *event)
 {
-	event->red = 1;
-	event->link[0]->red = 0;
-	event->link[1]->red = 0;
+	event->state |= EVENT_RED;
+	event->link[0]->state &= ~EVENT_RED;
+	event->link[1]->state &= ~EVENT_RED;
 }
 
 static struct event *rotate(struct event *event, int dir)
@@ -45,8 +52,8 @@ static struct event *rotate(struct event *event, int dir)
 	event->link[!dir] = tmp->link[dir];
 	tmp->link[dir] = event;
 
-	tmp->red = 0;
-	event->red = 1;
+	tmp->state &= ~EVENT_RED;
+	event->state |= EVENT_RED;
 
 	return tmp;
 }
@@ -64,7 +71,7 @@ static struct event *event_create(enum event_type event, int red)
 
 	e = malloc(sizeof *e);
 	e->link[0] = e->link[1] = &leaf;
-	e->red = red;
+	e->state = red;
 	e->type = event;
 	wl_list_init(&e->callbacks);
 	return e;
@@ -90,11 +97,11 @@ static void event_register(struct event **root,
 
 	for(; ; ) {
 		if(i == &leaf)
-			p->link[dir] = i = event_create(event, 1);
-		else if(i->link[0]->red && i->link[1]->red)
+			p->link[dir] = i = event_create(event, EVENT_RED);
+		else if(i->link[0]->state & i->link[1]->state & EVENT_RED)
 			flip(i);
 
-		if(i->red && p->red) {
+		if(i->state & p->state & EVENT_RED) {
 			int d = gg->link[1] == g;
 
 			if(i == p->link[last])
@@ -118,7 +125,20 @@ static void event_register(struct event **root,
 		i = i->link[dir];
 	}
 	*root = fake.link[1];
-	(*root)->red = 0;
+	(*root)->state &= ~EVENT_RED;
+}
+
+static void event_destroy_late(struct event *event)
+{
+	struct callback *cb, *tmp;
+
+	wl_list_for_each_safe(cb, tmp, &event->callbacks, link) {
+		cb->destroy(cb->data);
+		wl_list_remove(&cb->link);
+		free(cb);
+	}
+	if(event->state & EVENT_DEAD)
+		free(event);
 }
 
 static void event_fire(struct event *n, enum event_type ev)
@@ -127,8 +147,28 @@ static void event_fire(struct event *n, enum event_type ev)
 		if(n->type == ev) {
 			struct callback *cb;
 
+			n->state |= EVENT_ACTIVE;
 			wl_list_for_each(cb, &n->callbacks, link)
 				cb->callback(cb->data);
+
+			if(n->state & EVENT_OFF)
+				event_destroy_late(n);
+			else
+				n->state &= ~EVENT_ACTIVE;
+			return;
+		}
+		n = n->link[n->type < ev];
+	}
+}
+
+static void event_remove(struct event *n, enum event_type ev)
+{
+	while(n) {
+		if(n->type == ev) {
+			if(n->state & EVENT_ACTIVE)
+				n->state |= EVENT_OFF;
+			else
+				event_destroy_late(n);
 			return;
 		}
 		n = n->link[n->type < ev];
@@ -137,20 +177,15 @@ static void event_fire(struct event *n, enum event_type ev)
 
 static void event_destroy(struct event *root)
 {
-	struct callback *cb, *tmp;
+	if(root == &leaf)
+		return;
 
-	if(root->link[0] != &leaf)
-		event_destroy(root->link[0]);
+	event_destroy(root->link[0]);
+	event_destroy(root->link[1]);
 
-	if(root->link[1] != &leaf)
-		event_destroy(root->link[1]);
-
-	wl_list_for_each_safe(cb, tmp, &root->callbacks, link) {
-		cb->destroy(cb->data);
-		wl_list_remove(&cb->link);
-		free(cb);
-	}
-	free(root);
+	root->state |= EVENT_DEAD | EVENT_OFF;
+	if(~root->state & EVENT_ACTIVE)
+		event_destroy_late(root);
 }
 
 struct frame {
@@ -199,6 +234,7 @@ struct item {
 	void *api_data;
 	int api_focus;
 	int height;
+	struct event *event;
 };
 
 static const struct theme default_theme = {
@@ -347,6 +383,21 @@ static const struct wl_callback_listener frame_listener = {
 	redraw
 };
 
+void item_register_event(struct item *item,
+			 enum event_type ev,
+			 void (*cb)(void *),
+			 void (*destroy)(void *),
+			 void *data)
+{
+	struct callback *callback;
+
+	callback = malloc(sizeof *callback);
+	callback->callback = cb;
+	callback->destroy = destroy;
+	callback->data = data;
+	event_register(&item->event, ev, callback);
+}
+
 static void item_init(struct item *item, struct frame *parent,
 		      void (*api_destroy)(void *), void *api_data)
 {
@@ -354,6 +405,7 @@ static void item_init(struct item *item, struct frame *parent,
 
 	item->api_destroy = api_destroy;
 	item->api_data = api_data;
+	item->event = &leaf;
 
 	wl_list_insert(parent->items.prev, &item->link);
 
@@ -632,6 +684,11 @@ void frame_register_event(struct frame *frame,
 	callback->destroy = destroy;
 	callback->data = data;
 	event_register(&frame->event, ev, callback);
+}
+
+void frame_remove_events(struct frame *frame, enum event_type ev)
+{
+	event_remove(frame->event, ev);
 }
 
 struct frame *frame_create(struct menu *menu,

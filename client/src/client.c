@@ -257,6 +257,9 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 {
 	struct display *d = data;
 
+	if(!surf)
+		return;
+
 	if(surf == d->grab_surface)
 		return set_cursor(d, d->cursors[d->grab_cursor], serial);
 
@@ -268,6 +271,9 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t serial,
 			  struct wl_surface *surf)
 {
+	if(!surf)
+		return;
+
 	menu_event_pointer_leave(surf);
 }
 

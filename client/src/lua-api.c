@@ -22,7 +22,15 @@ struct userdata {
 
 struct cb_data {
 	lua_State *ls;
-	char *f;
+	int f;
+};
+
+static char const * const event_array[] = {
+	"none",
+	"enter",
+	"leave",
+	"click",
+	NULL
 };
 
 #ifndef NDEBUG
@@ -101,7 +109,7 @@ static void fire_event(void *data)
 {
 	struct cb_data *cb = data;
 
-	lua_getglobal(cb->ls, cb->f);
+	lua_rawgeti(cb->ls, LUA_REGISTRYINDEX, cb->f);
 	if(lua_pcall(cb->ls, 0, 0, 0))
 		throw_error(cb->ls);
 }
@@ -110,7 +118,7 @@ static void destroy_event(void *data)
 {
 	struct cb_data *cb = data;
 
-	free(cb->f);
+	luaL_unref(cb->ls, LUA_REGISTRYINDEX, cb->f);
 	free(cb);
 }
 
@@ -186,6 +194,29 @@ static int api_text_set_text(lua_State *ls)
 	return 0;
 }
 
+static int api_text_on(lua_State *ls)
+{
+	struct cb_data *cb_data;
+	int func_ref;
+	struct item *item = getself(ls, META_TEXT, "on");
+	enum event_type ev = luaL_checkoption(ls, 2, NULL, event_array);
+
+	luaL_checktype(ls, 3, LUA_TFUNCTION);
+	lua_pushvalue(ls, 3);
+	func_ref = luaL_ref(ls, LUA_REGISTRYINDEX);
+
+	cb_data = malloc(sizeof *cb_data);
+	cb_data->ls = ls;
+	cb_data->f = func_ref;
+
+	item_register_event(item,
+			    ev,
+			    fire_event,
+			    destroy_event,
+			    cb_data);
+	return 0;
+}
+
 static int api_bar_set_fill(lua_State *ls)
 {
 	struct item_bar *item = getself(ls, META_BAR, "set_fill");
@@ -255,21 +286,35 @@ static int api_menu_add_bar(lua_State *ls)
 	return 1;
 }
 
-static int api_menu_on_enter(lua_State *ls)
+static int api_menu_on(lua_State *ls)
 {
 	struct cb_data *cb_data;
-	struct frame *frame = getself(ls, META_MENU, "on_enter");
-	char *f = strdup(luaL_checkstring(ls, 2));
+	int func_ref;
+	struct frame *frame = getself(ls, META_MENU, "on");
+	enum event_type ev = luaL_checkoption(ls, 2, NULL, event_array);
+
+	luaL_checktype(ls, 3, LUA_TFUNCTION);
+	lua_pushvalue(ls, 3);
+	func_ref = luaL_ref(ls, LUA_REGISTRYINDEX);
 
 	cb_data = malloc(sizeof *cb_data);
 	cb_data->ls = ls;
-	cb_data->f = f;
+	cb_data->f = func_ref;
 
 	frame_register_event(frame,
-			     EVENT_ENTER,
+			     ev,
 			     fire_event,
 			     destroy_event,
 			     cb_data);
+	return 0;
+}
+
+static int api_menu_off(lua_State *ls)
+{
+	struct frame *frame = getself(ls, META_MENU, "off");
+	enum event_type ev = luaL_checkoption(ls, 2, NULL, event_array);
+
+	frame_remove_events(frame, ev);
 	return 0;
 }
 
@@ -322,12 +367,14 @@ static const luaL_Reg api_menu[] = {
 	{ "set_theme", api_menu_set_theme },
 	{ "add_text", api_menu_add_text },
 	{ "add_bar", api_menu_add_bar },
-	{ "on_enter", api_menu_on_enter },
+	{ "on", api_menu_on },
+	{ "off", api_menu_off },
 	{ 0, 0 }
 };
 
 static const luaL_Reg api_text[] = {
 	{ "set_text", api_text_set_text },
+	{ "on", api_text_on },
 	{ 0, 0 }
 };
 
