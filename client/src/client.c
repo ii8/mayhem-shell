@@ -12,6 +12,7 @@
 #include "pool.h"
 #include "menu.h"
 #include "cursors.h"
+#include "util.h"
 
 //#include <sys/types.h>
 
@@ -189,28 +190,42 @@ static void output_draw_bg(struct output* o)
 	wl_surface_commit(o->surf);
 }
 
-static void output_init(struct output *o, struct display *d)
+static int output_init(struct output *o, struct display *d)
 {
 	char *file = "/home/murray/.bg/Anime/default.png";
 
 	o->buffer = buffer_create(d->pool, 1920, 1080,
 				  WL_SHM_FORMAT_XRGB8888);
+	if(o->buffer == NULL)
+		goto err;
+
 	o->surf = wl_compositor_create_surface(d->compositor);
-	o->file = malloc(strlen(file) + 1);
-	strcpy(o->file, file);
+	o->file = strdup(file);
+	if(o->file == NULL)
+		goto err_file;
 
 	ms_menu_set_background(d->ms, o->output, o->surf);
 
 	output_draw_bg(o);
+	return 0;
+
+err_file:
+	buffer_destroy(o->buffer);
+err:
+	wl_list_remove(&o->link);
+	wl_output_destroy(o->output);
+	free(o);
+	return -1;
 }
 
 static void output_destroy(struct output *o)
 {
-	wl_list_remove(&o->link);
 	buffer_destroy(o->buffer);
+	wl_list_remove(&o->link);
 	wl_surface_destroy(o->surf);
 	wl_output_destroy(o->output);
 	free(o->file);
+	free(o);
 }
 
 static void shm_format(void *data, struct wl_shm *wl_shm, uint32_t format)
@@ -329,14 +344,13 @@ void seat_handle_capabilities(void *data, struct wl_seat *wl_seat,
 	struct display *d = data;
 
 	if(capabilities & WL_SEAT_CAPABILITY_POINTER) {
-		printf("have pointer\n");
 		if(d->pointer)
 			return;
 		d->pointer = wl_seat_get_pointer(d->seat);
 		wl_pointer_add_listener(d->pointer, &pointer_listener, d);
 	} else if(d->pointer) {
-		printf("no pointer\n");
 		wl_pointer_release(d->pointer);
+		d->pointer = NULL;
 	}
 }
 
@@ -355,17 +369,15 @@ static void registry_handle_global(void *data, struct wl_registry *r,
 {
 	struct display *d = data;
 
-	printf("got %s version %i\n", interface, version);
+	/* printf("got %s version %i\n", interface, version); */
 	if(strcmp(interface, "wl_compositor") == 0) {
 		d->compositor = wl_registry_bind(r, id,
 						 &wl_compositor_interface, 4);
 	} else if(strcmp(interface, "wl_shm") == 0) {
-		printf("binding shm\n");
 		d->shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(d->shm, &shm_listener, d);
 	} else if(strcmp(interface, "wl_output") == 0) {
-		printf("binding output\n");
-		struct output *o = calloc(1, sizeof *o);
+		struct output *o = zalloc(sizeof *o);
 		if(!o)
 			return;
 		o->output = wl_registry_bind(r, id, &wl_output_interface, 2);
@@ -373,11 +385,9 @@ static void registry_handle_global(void *data, struct wl_registry *r,
 		wl_output_add_listener(o->output, &output_listener, o);
 		wl_list_insert(&d->outputs, &o->link);
 	} else if(strcmp(interface, "ms_menu") == 0) {
-		printf("binding ms_menu\n");
 		d->ms = wl_registry_bind(r, id, &ms_menu_interface, 1);
 		ms_menu_add_listener(d->ms, &ms_listener, d);
 	} else if(strcmp(interface, "wl_seat") == 0) {
-		printf("binding wl_seat\n");
 		d->seat = wl_registry_bind(r, id, &wl_seat_interface, 5);
 		wl_seat_add_listener(d->seat, &seat_listener, d);
 	}
@@ -396,118 +406,141 @@ static const struct wl_registry_listener registry_listener = {
 
 static struct display *display_create(void)
 {
-	struct display *display;
+	struct display *d;
 	struct wl_cursor *cursor;
-	struct output *o;
+	struct output *o, *tmp;
 	unsigned i, j;
 
-	display = calloc(1, sizeof *display);
-	if(display == NULL)
+	d = zalloc(sizeof *d);
+	if(!d)
 		return NULL;
 
-	display->display = wl_display_connect(NULL);
-	if(!display->display) {
+	wl_list_init(&d->outputs);
+
+	d->display = wl_display_connect(NULL);
+	if(!d->display) {
 		fprintf(stderr, "Could not connect to display");
 		goto err_display;
 	}
 
-	wl_list_init(&display->outputs);
+	d->registry = wl_display_get_registry(d->display);
+	if(!d->registry)
+		goto err_registry;
+	wl_registry_add_listener(d->registry, &registry_listener, d);
 
-	display->registry = wl_display_get_registry(display->display);
-	wl_registry_add_listener(display->registry, &registry_listener,
-				 display);
+	if(wl_display_roundtrip(d->display) < 0)
+		goto err;
 
-	wl_display_roundtrip(display->display);
-	if(display->shm == NULL || display->compositor == NULL) {
+	if(!d->shm || !d->compositor || !d->ms) {
 		fprintf(stderr, "Missing globals\n");
 		goto err;
 	}
 
-	wl_display_roundtrip(display->display);
+	if(wl_display_roundtrip(d->display) < 0)
+		goto err;
 
-	if(!display->has_argb) {
+	if(!d->has_argb) {
 		fprintf(stderr, "No ARGB32, Compositor sucks!\n");
 		goto err;
 	}
 
-	display->pool = pool_create(display->shm, SHM_NAME, 8000);
-	if(display->pool == NULL)
+	d->pool = pool_create(d->shm, SHM_NAME, 8000);
+	if(!d->pool)
 		goto err;
 
-	display->cursor_theme = wl_cursor_theme_load(NULL, 32, display->shm);
-	if(!display->cursor_theme)
-		goto err;
+	d->cursor_theme = wl_cursor_theme_load(NULL, 32, d->shm);
+	if(!d->cursor_theme)
+		goto err_theme;
 
-	display->cursors = calloc(cursor_count, sizeof display->cursors[0]);
-	if(!display->cursors)
+	d->cursors = calloc(cursor_count, sizeof d->cursors[0]);
+	if(!d->cursors)
 		goto err_cursors;
 
-	for (i = 0; i < cursor_count; i++) {
+	for(i = 0; i < cursor_count; i++) {
 		cursor = NULL;
-		for (j = 0; !cursor && j < cursors[i].count; ++j)
+		for(j = 0; !cursor && j < cursors[i].count; ++j)
 			cursor = wl_cursor_theme_get_cursor(
-				display->cursor_theme, cursors[i].names[j]);
+				d->cursor_theme, cursors[i].names[j]);
 
-		if (!cursor)
+		if(!cursor)
 			fprintf(stderr, "could not load cursor '%s'\n",
 				cursors[i].names[0]);
 
-		display->cursors[i] = cursor;
+		d->cursors[i] = cursor;
 	}
 
-	display->grab_surface
-		= wl_compositor_create_surface(display->compositor);
-	ms_menu_set_grab_surface(display->ms, display->grab_surface);
+	d->grab_surface = wl_compositor_create_surface(d->compositor);
+	d->pointer_surface = wl_compositor_create_surface(d->compositor);
+	ms_menu_set_grab_surface(d->ms, d->grab_surface);
 
-	display->pointer_surface
-		= wl_compositor_create_surface(display->compositor);
+	wl_list_for_each(o, &d->outputs, link)
+		if(output_init(o, d) < 0)
+			goto err_output;
 
-	wl_list_for_each(o, &display->outputs, link)
-		output_init(o, display);
+	return d;
 
-	return display;
-
+err_output:
+	wl_surface_destroy(d->pointer_surface);
+	wl_surface_destroy(d->grab_surface);
+	free(d->cursors);
 err_cursors:
-	wl_cursor_theme_destroy(display->cursor_theme);
+	wl_cursor_theme_destroy(d->cursor_theme);
+err_theme:
+	pool_destroy(d->pool);
 err:
-	if(display->shm)
-		wl_shm_destroy(display->shm);
-	if(display->seat)
-		wl_seat_destroy(display->seat);
-	if(display->compositor)
-		wl_compositor_destroy(display->compositor);
-	wl_registry_destroy(display->registry);
-	wl_display_flush(display->display);
-	wl_display_disconnect(display->display);
+	if(d->pointer)
+		wl_pointer_release(d->pointer);
+	if(d->menu)
+		menu_destroy(d->menu);
+	if(d->shm)
+		wl_shm_destroy(d->shm);
+	if(d->seat)
+		wl_seat_destroy(d->seat);
+	if(d->compositor)
+		wl_compositor_destroy(d->compositor);
+	if(d->ms)
+		ms_menu_destroy(d->ms);
+	wl_list_for_each_safe(o, tmp, &d->outputs, link)
+		output_destroy(o);
+
+	wl_registry_destroy(d->registry);
+err_registry:
+	wl_display_flush(d->display);
+	wl_display_disconnect(d->display);
 
 err_display:
-	free(display);
+	free(d);
 	return NULL;
 }
 
-static void display_destroy(struct display *display)
+static void display_destroy(struct display *d)
 {
 	struct output *o, *tmp;
 
-	wl_cursor_theme_destroy(display->cursor_theme);
-	free(display->cursors);
-
-	wl_surface_destroy(display->grab_surface);
-	wl_surface_destroy(display->pointer_surface);
-
-	wl_shm_destroy(display->shm);
-	wl_compositor_destroy(display->compositor);
-
-	wl_list_for_each_safe(o, tmp, &display->outputs, link)
+	wl_surface_destroy(d->pointer_surface);
+	wl_surface_destroy(d->grab_surface);
+	free(d->cursors);
+	wl_cursor_theme_destroy(d->cursor_theme);
+	pool_destroy(d->pool);
+	if(d->pointer)
+		wl_pointer_release(d->pointer);
+	if(d->menu)
+		menu_destroy(d->menu);
+	if(d->shm)
+		wl_shm_destroy(d->shm);
+	if(d->seat)
+		wl_seat_destroy(d->seat);
+	if(d->compositor)
+		wl_compositor_destroy(d->compositor);
+	if(d->ms)
+		ms_menu_destroy(d->ms);
+	wl_list_for_each_safe(o, tmp, &d->outputs, link)
 		output_destroy(o);
 
-	pool_destroy(display->pool);
-
-	wl_registry_destroy(display->registry);
-	wl_display_flush(display->display);
-	wl_display_disconnect(display->display);
-
-	free(display);
+	wl_registry_destroy(d->registry);
+	wl_display_flush(d->display);
+	wl_display_disconnect(d->display);
+	free(d);
 }
 
 static void handle_sigint(int signum)
@@ -534,9 +567,6 @@ int main(int argc, char *argv[])
 		ret = wl_display_dispatch(display->display);
 
 	printf("Quit\n");
-
-	if(display->menu)
-		menu_destroy(display->menu);
 
 	display_destroy(display);
 
