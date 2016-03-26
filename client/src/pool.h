@@ -9,7 +9,8 @@ enum buffer_state {
 	BUFFER_ACTIVE	= 0x01,
 	BUFFER_BUSY	= 0x02,
 	BUFFER_FIRST	= 0x04,
-	BUFFER_LAST	= 0x08
+	BUFFER_LAST	= 0x08,
+	BUFFER_KILL	= 0x10
 };
 
 struct buffer {
@@ -28,6 +29,7 @@ void buffer_destroy(struct buffer* buffer);
 struct pool *pool_create(struct wl_shm *shm, char *name,
 			 int initial_size);
 void pool_destroy(struct pool* pool);
+void pool_setup(void);
 
 #endif
 

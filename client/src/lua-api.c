@@ -408,7 +408,12 @@ static int luaopen_mayhem(lua_State *ls)
 	return 1;
 }
 
-void *api_init(struct menu *menu)
+static void api_finish(void *context)
+{
+	lua_close(context);
+}
+
+void *api_init(struct menu *menu, char const *file, void **context)
 {
 	lua_State *ls = luaL_newstate();
 	luaL_openlibs(ls);
@@ -419,7 +424,7 @@ void *api_init(struct menu *menu)
 	luaL_requiref(ls, MODULE_NAME, luaopen_mayhem, 1);
 	lua_pop(ls, 1);
 
-	if(luaL_loadfile(ls, "/home/murray/Desktop/try/meh.lua"))
+	if(luaL_loadfile(ls, file))
 		goto err;
 
 	if(lua_pcall(ls, 0, 0, 0))
@@ -429,7 +434,8 @@ void *api_init(struct menu *menu)
 	if(lua_pcall(ls, 0, 0, 0))
 		goto err;
 
-	return ls;
+	*context = ls;
+	return &api_finish;
 
 err:
 	throw_error(ls);
@@ -437,9 +443,4 @@ err:
 	menu_close(menu);
 	lua_close(ls);
 	return NULL;
-}
-
-void api_finish(void *context)
-{
-	lua_close(context);
 }

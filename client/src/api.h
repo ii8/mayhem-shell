@@ -71,8 +71,9 @@ void item_text_set_text(struct item_text *item, const char *text);
 
 void throw(char const *e);
 
-void *api_init(struct menu *);
-void api_finish(void *);
+#ifdef API_LUA
+void *api_init(struct menu *, char const *, void **);
+#endif
 
 #endif
 

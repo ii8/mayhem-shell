@@ -5207,7 +5207,10 @@ static void show_menu_binding(struct weston_keyboard *keyboard, uint32_t time,
 {
 	struct mayhem_shell *shell = data;
 
-	ms_menu_send_spawn(shell->child.mayhem_shell, 0, 0);
+	ms_menu_send_despawn(shell->child.mayhem_shell);
+	ms_menu_send_spawn(shell->child.mayhem_shell,
+			   MS_MENU_FRONTEND_LUA,
+			   "/home/murray/Desktop/try/meh.lua");
 }
 
 static void shell_reposition_view_on_output_destroy(struct weston_view *view)

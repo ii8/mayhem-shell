@@ -96,7 +96,8 @@ static void ms_grab_cursor(void *data, struct ms_menu *ms, uint32_t cursor)
 	}
 }
 
-static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
+static void ms_spawn(void *data, struct ms_menu *shell,
+		     uint32_t lang, char const *file)
 {
 	struct display *d = data;
 	struct menu *menu;
@@ -104,7 +105,7 @@ static void ms_spawn(void *data, struct ms_menu *shell, uint32_t x, uint32_t y)
 	if(d->menu != NULL)
 		return;
 
-	menu = menu_create(d->compositor, d->ms, d->pool);
+	menu = menu_create(d->compositor, d->ms, d->pool, lang, file);
 	if(!menu) {
 		fprintf(stderr, "Could not create menu\n");
 		return;
@@ -450,7 +451,7 @@ static struct display *display_create(void)
 
 	d->cursor_theme = wl_cursor_theme_load(NULL, 32, d->shm);
 	if(!d->cursor_theme)
-		goto err_theme;
+		goto err;
 
 	d->cursors = calloc(cursor_count, sizeof d->cursors[0]);
 	if(!d->cursors)
@@ -485,8 +486,6 @@ err_output:
 	free(d->cursors);
 err_cursors:
 	wl_cursor_theme_destroy(d->cursor_theme);
-err_theme:
-	pool_destroy(d->pool);
 err:
 	if(d->pointer)
 		wl_pointer_release(d->pointer);
@@ -502,6 +501,12 @@ err:
 		ms_menu_destroy(d->ms);
 	wl_list_for_each_safe(o, tmp, &d->outputs, link)
 		output_destroy(o);
+
+	/* pool cannot be created before globals because it needs wl_shm
+	 * and it cannot be destroyed before globals because buffers may
+	 * still be in use, so we need an if here */
+	if(d->pool)
+		pool_destroy(d->pool);
 
 	wl_registry_destroy(d->registry);
 err_registry:
@@ -521,7 +526,6 @@ static void display_destroy(struct display *d)
 	wl_surface_destroy(d->grab_surface);
 	free(d->cursors);
 	wl_cursor_theme_destroy(d->cursor_theme);
-	pool_destroy(d->pool);
 	if(d->pointer)
 		wl_pointer_release(d->pointer);
 	if(d->menu)
@@ -536,6 +540,8 @@ static void display_destroy(struct display *d)
 		ms_menu_destroy(d->ms);
 	wl_list_for_each_safe(o, tmp, &d->outputs, link)
 		output_destroy(o);
+
+	pool_destroy(d->pool);
 
 	wl_registry_destroy(d->registry);
 	wl_display_flush(d->display);
@@ -553,6 +559,8 @@ int main(int argc, char *argv[])
 	struct sigaction sigint;
 	struct display *display;
 	int ret = 0;
+
+	pool_setup();
 
 	display = display_create();
 	if(!display)

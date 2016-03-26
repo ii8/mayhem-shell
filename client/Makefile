@@ -11,12 +11,13 @@ SOURCES=\
 	../protocol/mayhem.c
 
 ifeq ($(USE_PYTHON), true)
-CFLAGS+=$$(python3-config --cflags)
+CFLAGS+=$$(python3-config --cflags) -DAPI_PYTHON
 LDFLAGS+=-lpython3.4m
 SOURCES+=src/python-api.c
 endif
 
 ifeq ($(USE_LUA), true)
+CFLAGS+=-DAPI_LUA
 LDFLAGS+=-llua
 SOURCES+=src/lua-api.c
 endif

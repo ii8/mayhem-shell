@@ -215,6 +215,7 @@ struct menu {
 	struct ms_menu *ms;
 	struct theme *theme;
 	struct wl_list top_frames;
+	void (*api_destroy)(void *data);
 	void *api_context;
 };
 
@@ -776,7 +777,7 @@ struct theme *menu_get_theme(struct menu *menu)
 }
 
 struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
-			 struct pool *pool)
+			 struct pool *pool, uint32_t lang, char const *file)
 {
 	struct menu *menu;
 
@@ -798,9 +799,26 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 	if(menu->theme->font_family == NULL)
 		goto err_font;
 
-	menu->api_context = api_init(menu);
-	if(!menu->api_context)
+	switch(lang) {
+	case MS_MENU_FRONTEND_LUA:
+#ifdef API_LUA
+		menu->api_destroy = api_init(menu, file, &menu->api_context);
+		if(!menu->api_destroy)
+			goto err;
+		break;
+#else
+		fprintf(stderr, "Not compiled with lua frontend\n");
 		goto err;
+#endif
+	case MS_MENU_FRONTEND_PYTHON:
+#ifdef API_PYTHON
+		fprintf(stderr, "Python frontend not implemented\n");
+		goto err;
+#else
+		fprintf(stderr, "Not compiled with python frontend\n");
+		goto err;
+#endif
+	}
 
 	return menu;
 
@@ -822,7 +840,7 @@ void throw(char const *e)
 void menu_destroy(struct menu *menu)
 {
 	menu_close(menu);
-	api_finish(menu->api_context);
+	menu->api_destroy(menu->api_context);
 	free(menu->theme->font_family);
 	free(menu->theme);
 	free(menu);

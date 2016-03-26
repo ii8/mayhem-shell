@@ -13,6 +13,7 @@
 #include <wayland-client-protocol.h>
 
 #include "pool.h"
+#include "util.h"
 
 struct pool {
 	struct wl_shm_pool* shm_pool;
@@ -26,10 +27,12 @@ static long pagesize;
 
 static void buffer_release(void *data, struct wl_buffer *buffer)
 {
-	struct buffer *mybuf = data;
+	struct buffer *buf = data;
 
-	assert(mybuf->flags & BUFFER_ACTIVE);
-	mybuf->flags &= ~BUFFER_BUSY;
+	assert(buf->flags & BUFFER_ACTIVE);
+	buf->flags &= ~BUFFER_BUSY;
+	if(buf->flags & BUFFER_KILL)
+		buffer_destroy(buf);
 }
 
 static const struct wl_buffer_listener buffer_listener = {
@@ -52,7 +55,7 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 			if(segment->size == size) {
 				buffer = segment;
 			} else {
-				buffer = calloc(1, sizeof *buffer);
+				buffer = zalloc(sizeof *buffer);
 				if(!buffer)
 					return NULL;
 				wl_list_insert(&segment->link, &buffer->link);
@@ -67,11 +70,10 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 
 
 	if(wl_list_empty(&pool->buffers)) {
-		buffer = calloc(1, sizeof *buffer);
+		buffer = zalloc(sizeof *buffer);
 		if(!buffer)
 			return NULL;
 		buffer->flags |= BUFFER_FIRST;
-		assert(buffer->offset == 0);
 	} else {
 		segment = wl_container_of(pool->buffers.next, segment, link);
 		assert(segment->flags & BUFFER_LAST);
@@ -81,7 +83,7 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 			buffer->size = size;
 			goto grow;
 		} else {
-			buffer = calloc(1, sizeof *buffer);
+			buffer = zalloc(sizeof *buffer);
 			if(!buffer)
 				return NULL;
 			segment->flags &= ~BUFFER_LAST;
@@ -105,6 +107,7 @@ derp:
 	if(buffer->addr == MAP_FAILED) {
 		fprintf(stderr, "mmap failed: %m\n");
 		buffer->flags &= ~BUFFER_ACTIVE;
+		/* TODO: remerge segments */
 		return NULL;
 	}
 
@@ -113,6 +116,7 @@ derp:
 						   height, stride, format);
 	wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
 
+	printf("buffer_create: %p\n", buffer);
 	return buffer;
 }
 
@@ -120,12 +124,18 @@ void buffer_destroy(struct buffer* buffer)
 {
 	struct buffer *segment;
 
-	//assert(~buffer->flags & BUFFER_BUSY);
 	assert(buffer->flags & BUFFER_ACTIVE);
+	if(buffer->flags & BUFFER_BUSY) {
+		buffer->flags |= BUFFER_KILL;
+		return;
+	}
 
 	buffer->flags &= ~BUFFER_ACTIVE;
 	wl_buffer_destroy(buffer->buffer);
-	munmap(buffer->addr, buffer->size);
+	if(munmap(buffer->addr, buffer->size) < 0)
+		fprintf(stderr, "munmap error: %m\n");
+
+	printf("buffer_destroy: %p\n", buffer);
 
 	if(buffer->flags & BUFFER_LAST)
 		goto skip;
@@ -159,16 +169,14 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 	int len;
 
 	pool = malloc(sizeof *pool);
-	if(pool == NULL)
+	if(!pool)
 		return NULL;
 
 	srand(++seed);
 	len = strlen(name);
 	pool->name = malloc(len + 8);
-	if(pool->name == NULL) {
-		free(pool);
-		return NULL;
-	}
+	if(!pool->name)
+		goto err_name;
 	strcpy(pool->name, name);
 
 	/* Create file */
@@ -178,14 +186,10 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 		pool->fd = shm_open(pool->name, O_RDWR | O_CREAT | O_EXCL, 0600);
 	} while(errno == EEXIST && max--);
 
-	if(pool->fd < 0) {
-		fprintf(stderr, "Fail create pool: %s\n", strerror(errno));
-		free(pool);
-		return NULL;
-	}
+	if(pool->fd < 0)
+		goto err_file;
 
 	/* Create pool */
-	pagesize = sysconf(_SC_PAGESIZE);
 	if(initial_size % pagesize)
 		initial_size += pagesize - initial_size % pagesize;
 	pool->size = initial_size;
@@ -194,6 +198,13 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 	wl_list_init(&pool->buffers);
 
 	return pool;
+
+err_file:
+	free(pool->name);
+err_name:
+	free(pool);
+	fprintf(stderr, "Failed to create pool: %s\n", strerror(errno));
+	return NULL;
 }
 
 void pool_destroy(struct pool* pool)
@@ -218,3 +229,7 @@ void pool_destroy(struct pool* pool)
 	free(pool);
 }
 
+void pool_setup(void)
+{
+	pagesize = sysconf(_SC_PAGESIZE);
+}

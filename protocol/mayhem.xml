@@ -19,18 +19,18 @@
 
     <request name="set_grab_surface">
       <description summary="set grab surface">
-	The surface set by this request will receive a fake
-	pointer.enter event during grabs at position 0, 0 and is
-	expected to set an appropriate cursor image as described by
-	the grab_cursor event sent just before the enter event.
+        The surface set by this request will receive a fake
+        pointer.enter event during grabs at position 0, 0 and is
+        expected to set an appropriate cursor image as described by
+        the grab_cursor event sent just before the enter event.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
     </request>
 
     <request name="get_menu_surface">
       <description summary="create a menu surface from a surface">
-	This creates an ms_surface for the given surface and gives it the
-	ms_surface role.
+        This creates an ms_surface for the given surface and gives it the
+        ms_surface role.
       </description>
       <arg name="id" type="new_id" interface="ms_surface"/>
       <arg name="surface" type="object" interface="wl_surface"/>
@@ -38,10 +38,10 @@
 
     <event name="grab_cursor">
       <description summary="tell client what cursor to show during a grab">
-	This event will be sent immediately before a fake enter event on the
-	grab surface.
+        This event will be sent immediately before a fake enter event on the
+        grab surface.
       </description>
-      <arg name="cursor" type="uint"/>
+      <arg name="cursor" type="uint" enum="cursor"/>
     </event>
 
     <enum name="cursor">
@@ -70,9 +70,14 @@
         This event will only occur once for each menu tree, submenus
         should be handled internally.
       </description>
-      <arg name="x" type="uint"/>
-      <arg name="y" type="uint"/>
+      <arg name="frontend" type="uint" enum="frontend"/>
+      <arg name="file" type="string"/>
     </event>
+
+    <enum name="frontend">
+      <entry name="lua" value="0"/>
+      <entry name="python" value="1"/>
+    </enum>
 
     <event name="despawn">
       <description summary="remove any menus">
