@@ -22,6 +22,7 @@ struct display {
 	struct wl_display *display;
 	struct wl_registry *registry;
 	struct wl_compositor *compositor;
+	struct wl_subcompositor *subcompositor;
 	struct wl_shm *shm;
 	struct wl_seat *seat;
 	struct wl_pointer *pointer;
@@ -105,7 +106,8 @@ static void ms_spawn(void *data, struct ms_menu *shell,
 	if(d->menu != NULL)
 		return;
 
-	menu = menu_create(d->compositor, d->ms, d->pool, lang, file);
+	menu = menu_create(d->compositor, d->subcompositor, d->ms, d->pool,
+			   lang, file);
 	if(!menu) {
 		fprintf(stderr, "Could not create menu\n");
 		return;
@@ -374,6 +376,9 @@ static void registry_handle_global(void *data, struct wl_registry *r,
 	if(strcmp(interface, "wl_compositor") == 0) {
 		d->compositor = wl_registry_bind(r, id,
 						 &wl_compositor_interface, 4);
+	} else if(strcmp(interface, "wl_subcompositor") == 0) {
+		d->subcompositor =
+			wl_registry_bind(r, id, &wl_subcompositor_interface, 1);
 	} else if(strcmp(interface, "wl_shm") == 0) {
 		d->shm = wl_registry_bind(r, id, &wl_shm_interface, 1);
 		wl_shm_add_listener(d->shm, &shm_listener, d);
@@ -432,7 +437,7 @@ static struct display *display_create(void)
 	if(wl_display_roundtrip(d->display) < 0)
 		goto err;
 
-	if(!d->shm || !d->compositor || !d->ms) {
+	if(!d->shm || !d->compositor || !d->subcompositor || !d->ms) {
 		fprintf(stderr, "Missing globals\n");
 		goto err;
 	}
@@ -487,6 +492,9 @@ err_output:
 err_cursors:
 	wl_cursor_theme_destroy(d->cursor_theme);
 err:
+	wl_list_for_each_safe(o, tmp, &d->outputs, link)
+		output_destroy(o);
+
 	if(d->pointer)
 		wl_pointer_release(d->pointer);
 	if(d->menu)
@@ -495,12 +503,12 @@ err:
 		wl_shm_destroy(d->shm);
 	if(d->seat)
 		wl_seat_destroy(d->seat);
+	if(d->subcompositor)
+		wl_subcompositor_destroy(d->subcompositor);
 	if(d->compositor)
 		wl_compositor_destroy(d->compositor);
 	if(d->ms)
 		ms_menu_destroy(d->ms);
-	wl_list_for_each_safe(o, tmp, &d->outputs, link)
-		output_destroy(o);
 
 	/* pool cannot be created before globals because it needs wl_shm
 	 * and it cannot be destroyed before globals because buffers may
@@ -526,20 +534,20 @@ static void display_destroy(struct display *d)
 	wl_surface_destroy(d->grab_surface);
 	free(d->cursors);
 	wl_cursor_theme_destroy(d->cursor_theme);
+
+	wl_list_for_each_safe(o, tmp, &d->outputs, link)
+		output_destroy(o);
+
 	if(d->pointer)
 		wl_pointer_release(d->pointer);
 	if(d->menu)
 		menu_destroy(d->menu);
-	if(d->shm)
-		wl_shm_destroy(d->shm);
+	wl_shm_destroy(d->shm);
 	if(d->seat)
 		wl_seat_destroy(d->seat);
-	if(d->compositor)
-		wl_compositor_destroy(d->compositor);
-	if(d->ms)
-		ms_menu_destroy(d->ms);
-	wl_list_for_each_safe(o, tmp, &d->outputs, link)
-		output_destroy(o);
+	wl_subcompositor_destroy(d->subcompositor);
+	wl_compositor_destroy(d->compositor);
+	ms_menu_destroy(d->ms);
 
 	pool_destroy(d->pool);
 

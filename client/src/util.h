@@ -1,12 +1,12 @@
 #ifndef UTIL_H
 #define UTIL_H
 
-static void *zalloc(size_t s)
+static inline void *zalloc(size_t s)
 {
 	return calloc(1, s);
 }
 
-static void *xmalloc(size_t s)
+static inline void *xmalloc(size_t s)
 {
 	void *p = malloc(s);
 
@@ -15,7 +15,7 @@ static void *xmalloc(size_t s)
 	return p;
 }
 
-static void *xzalloc(size_t s)
+static inline void *xzalloc(size_t s)
 {
 	void *p = zalloc(s);
 

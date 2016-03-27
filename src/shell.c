@@ -2409,7 +2409,8 @@ static void shell_configure_fullscreen(struct shell_surface *shsurf)
 			struct weston_mode mode = {0,
 				surf_width * surface->buffer_viewport.buffer.scale,
 				surf_height * surface->buffer_viewport.buffer.scale,
-				shsurf->fullscreen.framerate};
+				shsurf->fullscreen.framerate,
+				{ NULL, NULL} };
 
 			if (weston_output_mode_switch_to_temporary(output, &mode,
 					surface->buffer_viewport.buffer.scale) == 0) {

@@ -86,6 +86,10 @@ static void event_register(struct event **root,
 	struct event *p, *g, *gg;
 	int dir = 0, last;
 
+	/* Initializing `last` is not actually necessary, but it stops the
+	 * compiler crying */
+	last = 0;
+
 	if(*root == &leaf) {
 		*root = event_create(event, 0);
 		wl_list_insert(&(*root)->callbacks, &cb->link);
@@ -192,7 +196,10 @@ struct frame {
 	struct wl_list link;
 	int width, height;
 	struct wl_surface *surface;
-	struct ms_surface *msurf;
+	union {
+		struct ms_surface *main;
+		struct wl_subsurface *sub;
+	} role;
 	struct buffer *buffers[2];
 	struct wl_callback *callback;
 	/* need_resize is usually set to 2, one resize for each buffer */
@@ -212,6 +219,7 @@ struct frame {
 struct menu {
 	struct pool *pool;
 	struct wl_compositor *ec;
+	struct wl_subcompositor *sc;
 	struct ms_menu *ms;
 	struct theme *theme;
 	struct wl_list top_frames;
@@ -651,6 +659,14 @@ int frame_show(struct frame *frame)
 	return 0;
 }
 
+void frame_move(struct frame *frame, int32_t x, int32_t y)
+{
+	if(!frame->parent)
+		return;
+
+	wl_subsurface_set_position(frame->role.sub, x, y);
+}
+
 struct theme *frame_get_theme(struct frame *frame)
 {
 	if(frame->theme != frame->menu->theme)
@@ -707,17 +723,22 @@ struct frame *frame_create(struct menu *menu,
 	frame->parent = parent;
 	frame->surface = wl_compositor_create_surface(menu->ec);
 	wl_surface_set_user_data(frame->surface, frame);
-	frame->msurf = ms_menu_get_menu_surface(menu->ms, frame->surface);
+	if(parent) {
+		frame->role.sub =
+			wl_subcompositor_get_subsurface(menu->sc,
+							frame->surface,
+							parent->surface);
+		wl_subsurface_set_desync(frame->role.sub);
+		wl_list_insert(&parent->children, &frame->link);
+	} else {
+		frame->role.main = ms_menu_get_menu_surface(menu->ms,
+							    frame->surface);
+		wl_list_insert(&menu->top_frames, &frame->link);
+	}
 
 	frame->theme = menu->theme;
-
 	frame->width = frame->theme->min_width;
 	frame->event = &leaf;
-
-	if(parent)
-		wl_list_insert(&parent->children, &frame->link);
-	else
-		wl_list_insert(&menu->top_frames, &frame->link);
 
 	wl_list_init(&frame->children);
 	wl_list_init(&frame->items);
@@ -756,7 +777,8 @@ void frame_destroy(struct frame *frame)
 		free(frame->theme);
 	}
 
-	ms_surface_destroy(frame->msurf);
+	if(!frame->parent)
+		ms_surface_destroy(frame->role.main);
 	wl_surface_destroy(frame->surface);
 
 	wl_list_remove(&frame->link);
@@ -776,8 +798,9 @@ struct theme *menu_get_theme(struct menu *menu)
 	return menu->theme;
 }
 
-struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
-			 struct pool *pool, uint32_t lang, char const *file)
+struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
+			 struct ms_menu *ms, struct pool *pool, uint32_t lang,
+			 char const *file)
 {
 	struct menu *menu;
 
@@ -786,6 +809,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct ms_menu *ms,
 		goto err_menu;
 
 	menu->ec = ec;
+	menu->sc = sc;
 	menu->ms = ms;
 	menu->pool = pool;
 	wl_list_init(&menu->top_frames);

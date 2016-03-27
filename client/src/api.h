@@ -50,6 +50,7 @@ void frame_register_event(struct frame *,
 			  void (*)(void *),
 			  void *);
 void frame_remove_events(struct frame *frame, enum event_type ev);
+void frame_move(struct frame *frame, int32_t x, int32_t y);
 struct theme *frame_get_theme(struct frame *frame);
 int frame_show(struct frame *);
 

@@ -33,14 +33,14 @@ static char const * const event_array[] = {
 	NULL
 };
 
-#ifndef NDEBUG
-static void dump_stack(lua_State *ls)
+#ifdef DEBUG
+static void __attribute__((unused)) dump_stack(lua_State *ls)
 {
 	int i;
 	int top = lua_gettop(ls);
 
 	printf("| ");
-	for(i = 1; i<=top; i++) {
+	for(i = 1; i <= top; i++) {
 		int t = lua_type(ls, i);
 
 		switch(t) {
@@ -96,6 +96,39 @@ static void *getself(lua_State *ls, char *mt, char *f)
 			   "on invalid object", f);
 
 	return data->data;
+}
+
+static struct item *itemself(lua_State *ls, char *f)
+{
+	struct userdata *data = lua_touserdata(ls, 1);
+	static char const *mt[] = {
+		META_TEXT,
+		META_BAR,
+		NULL
+	};
+	int i = 0;
+
+	if(!data || !data->valid)
+		goto err;
+
+	if(!lua_getmetatable(ls, 1))
+		goto err;
+
+	while(mt[i]) {
+		luaL_getmetatable(ls, mt[i++]);
+		if(lua_rawequal(ls, -1, -2)) {
+			lua_pop(ls, 2);
+			return data->data;
+		}
+		lua_pop(ls, 1);
+	}
+	lua_pop(ls, 1);
+
+err:
+	luaL_error(ls, "attempt to call method '%s' "
+		   "on invalid object", f);
+	return NULL; /* silence warning */
+
 }
 
 static void destroy_userdata(void *data)
@@ -194,11 +227,27 @@ static int api_text_set_text(lua_State *ls)
 	return 0;
 }
 
-static int api_text_on(lua_State *ls)
+static int api_bar_set_fill(lua_State *ls)
+{
+	struct item_bar *item = getself(ls, META_BAR, "set_fill");
+	double fill = luaL_checknumber(ls, 2);
+	fill /= 100;
+
+	if(fill > 1.0)
+		fill = 1.0;
+	else if(fill < 0.0)
+		fill = 0.0;
+
+	item_bar_set_fill(item, fill);
+
+	return 0;
+}
+
+static int api_item_on(lua_State *ls)
 {
 	struct cb_data *cb_data;
 	int func_ref;
-	struct item *item = getself(ls, META_TEXT, "on");
+	struct item *item = itemself(ls, "on");
 	enum event_type ev = luaL_checkoption(ls, 2, NULL, event_array);
 
 	luaL_checktype(ls, 3, LUA_TFUNCTION);
@@ -214,22 +263,6 @@ static int api_text_on(lua_State *ls)
 			    fire_event,
 			    destroy_event,
 			    cb_data);
-	return 0;
-}
-
-static int api_bar_set_fill(lua_State *ls)
-{
-	struct item_bar *item = getself(ls, META_BAR, "set_fill");
-	double fill = luaL_checknumber(ls, 2);
-	fill /= 100;
-
-	if(fill > 1.0)
-		fill = 1.0;
-	else if(fill < 0.0)
-		fill = 0.0;
-
-	item_bar_set_fill(item, fill);
-
 	return 0;
 }
 
@@ -250,9 +283,34 @@ static int api_menu_close(lua_State *ls)
 	return 0;
 }
 
+static int api_menu_submenu(lua_State *ls)
+{
+	struct userdata *data;
+	struct menu *menu = getmenu(ls);
+	struct frame *frame = getself(ls, META_MENU, "submenu");
+
+	data = lua_newuserdata(ls, sizeof(*data));
+	luaL_setmetatable(ls, META_MENU);
+
+	data->valid = 1;
+	data->data = frame_create(menu, frame, destroy_userdata, data);
+
+	return 1;
+}
+
 static int api_menu_set_theme(lua_State *ls)
 {
 
+	return 0;
+}
+
+static int api_menu_move_to(lua_State *ls)
+{
+	struct frame *frame = getself(ls, META_MENU, "move_to");
+	lua_Integer x = luaL_checkinteger(ls, 2);
+	lua_Integer y = luaL_checkinteger(ls, 3);
+
+	frame_move(frame, x, y);
 	return 0;
 }
 
@@ -364,7 +422,9 @@ static const luaL_Reg api_base[] = {
 static const luaL_Reg api_menu[] = {
 	{ "show", api_menu_show },
 	{ "close", api_menu_close },
+	{ "submenu", api_menu_submenu },
 	{ "set_theme", api_menu_set_theme },
+	{ "move_to", api_menu_move_to },
 	{ "add_text", api_menu_add_text },
 	{ "add_bar", api_menu_add_bar },
 	{ "on", api_menu_on },
@@ -372,13 +432,17 @@ static const luaL_Reg api_menu[] = {
 	{ 0, 0 }
 };
 
+#define api_item \
+	{ "on", api_item_on }
+
 static const luaL_Reg api_text[] = {
+	api_item,
 	{ "set_text", api_text_set_text },
-	{ "on", api_text_on },
 	{ 0, 0 }
 };
 
 static const luaL_Reg api_bar[] = {
+	api_item,
 	{ "set_fill", api_bar_set_fill },
 	{ 0, 0 }
 };
