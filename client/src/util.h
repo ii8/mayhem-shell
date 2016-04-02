@@ -24,4 +24,14 @@ static inline void *xzalloc(size_t s)
 	return p;
 }
 
+static inline char *xstrdup(char const *s)
+{
+	char *d = strdup(s);
+
+	if(d == NULL)
+		exit(EXIT_FAILURE);
+
+	return d;
+}
+
 #endif

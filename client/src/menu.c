@@ -12,12 +12,13 @@
 #include "pool.h"
 #include "menu.h"
 #include "api.h"
+#include "util.h"
 
 #define PI 3.141592654
 
 struct callback {
 	struct wl_list link;
-	void (*callback)(void *);
+	void (*callback)(void *, void *);
 	void (*destroy)(void *);
 	void *data;
 };
@@ -145,7 +146,9 @@ static void event_destroy_late(struct event *event)
 		free(event);
 }
 
-static void event_fire(struct event *n, enum event_type ev)
+static void run_event(enum event_type ev, struct callback *cb, void *event);
+
+static void event_fire(struct event *n, enum event_type ev, void *event)
 {
 	while(n) {
 		if(n->type == ev) {
@@ -153,7 +156,7 @@ static void event_fire(struct event *n, enum event_type ev)
 
 			n->state |= EVENT_ACTIVE;
 			wl_list_for_each(cb, &n->callbacks, link)
-				cb->callback(cb->data);
+				run_event(ev, cb, event);
 
 			if(n->state & EVENT_OFF)
 				event_destroy_late(n);
@@ -193,7 +196,6 @@ static void event_destroy(struct event *root)
 }
 
 struct frame {
-	struct wl_list link;
 	int width, height;
 	struct wl_surface *surface;
 	union {
@@ -206,13 +208,15 @@ struct frame {
 	int dirty, need_resize;
 	struct menu *menu;
 	struct frame *parent; /* NULL if first */
+	struct item *open;
+	struct frame *child;
 	struct theme *theme;
-	struct wl_list children;
 	struct wl_list items;
+	uint32_t enter_time;
+	struct item *pfocus;
 	void (*api_destroy)(void *data);
 	void *api_data;
 	int api_focus;
-	int pfocus;
 	struct event *event;
 };
 
@@ -222,7 +226,8 @@ struct menu {
 	struct wl_subcompositor *sc;
 	struct ms_menu *ms;
 	struct theme *theme;
-	struct wl_list top_frames;
+	struct frame *mainframe;
+	struct frame *pfocus;
 	void (*api_destroy)(void *data);
 	void *api_context;
 };
@@ -247,6 +252,7 @@ struct item {
 };
 
 static const struct theme default_theme = {
+	.open_delay = 300,
 	.color = 0x4791FFFF,
 	.color_from = 0x14395EFF,
 	.color_to = 0x14537DFF,
@@ -328,6 +334,35 @@ static void draw_bg(cairo_t *cr, struct frame *frame)
 	cairo_pattern_destroy(bg);
 }
 
+static void try_open(struct frame *frame, uint32_t time)
+{
+	struct item *item = frame->pfocus;
+	struct ev_open *ev;
+
+	if(!item)
+		return;
+
+	if(frame->enter_time == 0)
+		frame->enter_time = time;
+	if(time - frame->enter_time < frame->theme->open_delay)
+		return;
+
+	if(frame->child) {
+		if(item == frame->open)
+			return;
+
+		frame_destroy(frame->child);
+		frame->child = NULL;
+	}
+
+	ev = xmalloc(sizeof *ev);
+	ev->frame = frame;
+	ev->item = item;
+
+	event_fire(item->event, EVENT_OPEN, ev);
+	free(ev);
+}
+
 static const struct wl_callback_listener frame_listener;
 
 static void redraw(void *data, struct wl_callback *callback, uint32_t time)
@@ -339,6 +374,8 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	cairo_t *cr;
 	unsigned int stride;
 	int offset;
+
+	try_open(frame, time);
 
 	assert(callback == frame->callback);
 
@@ -392,9 +429,22 @@ static const struct wl_callback_listener frame_listener = {
 	redraw
 };
 
+unsigned item_offset(struct item *item)
+{
+	struct item *i;
+	unsigned offset = 0;
+
+	wl_list_for_each(i, &item->parent->items, link) {
+		if(item == i)
+			return offset;
+		offset += i->height;
+	}
+	assert(0);
+}
+
 void item_register_event(struct item *item,
 			 enum event_type ev,
-			 void (*cb)(void *),
+			 void (*cb)(void *, void *),
 			 void (*destroy)(void *),
 			 void *data)
 {
@@ -509,7 +559,7 @@ struct item_text *item_text_create(struct frame *parent,
 	cairo_font_extents_t font_ext;
 	cairo_text_extents_t text_ext;
 
-	item = calloc(1, sizeof(struct item_text));
+	item = zalloc(sizeof(struct item_text));
 	if(!item)
 		return NULL;
 
@@ -659,12 +709,9 @@ int frame_show(struct frame *frame)
 	return 0;
 }
 
-void frame_move(struct frame *frame, int32_t x, int32_t y)
+int frame_width(struct frame *frame)
 {
-	if(!frame->parent)
-		return;
-
-	wl_subsurface_set_position(frame->role.sub, x, y);
+	return frame->width;
 }
 
 struct theme *frame_get_theme(struct frame *frame)
@@ -672,25 +719,17 @@ struct theme *frame_get_theme(struct frame *frame)
 	if(frame->theme != frame->menu->theme)
 		return frame->theme;
 
-	frame->theme = malloc(sizeof(struct theme));
-	if(frame->theme == NULL)
-		return NULL;
-
+	frame->theme = xmalloc(sizeof(struct theme));
 	memcpy(frame->theme, frame->menu->theme, sizeof *frame->theme);
 
-	frame->theme->font_family = strdup(frame->menu->theme->font_family);
-	if(frame->theme->font_family == NULL) {
-		free(frame->theme);
-		frame->theme = frame->menu->theme;
-		return NULL;
-	}
+	frame->theme->font_family = xstrdup(frame->menu->theme->font_family);
 
 	return frame->theme;
 }
 
 void frame_register_event(struct frame *frame,
 			  enum event_type ev,
-			  void (*cb)(void *),
+			  void (*cb)(void *, void *),
 			  void (*destroy)(void *),
 			  void *data)
 {
@@ -708,14 +747,11 @@ void frame_remove_events(struct frame *frame, enum event_type ev)
 	event_remove(frame->event, ev);
 }
 
-struct frame *frame_create(struct menu *menu,
-			   struct frame *parent,
-			   void (*callback)(void *),
-			   void *data)
+static struct frame *frame_create(struct menu *menu, struct frame *parent)
 {
 	struct frame *frame;
 
-	frame = calloc(1, sizeof *frame);
+	frame = zalloc(sizeof *frame);
 	if(!frame)
 		return NULL;
 
@@ -729,35 +765,37 @@ struct frame *frame_create(struct menu *menu,
 							frame->surface,
 							parent->surface);
 		wl_subsurface_set_desync(frame->role.sub);
-		wl_list_insert(&parent->children, &frame->link);
+		parent->child = frame;
 	} else {
 		frame->role.main = ms_menu_get_menu_surface(menu->ms,
 							    frame->surface);
-		wl_list_insert(&menu->top_frames, &frame->link);
+		menu->mainframe = frame;
 	}
 
 	frame->theme = menu->theme;
 	frame->width = frame->theme->min_width;
 	frame->event = &leaf;
+	frame->child = NULL;
 
-	wl_list_init(&frame->children);
 	wl_list_init(&frame->items);
-
-	frame->api_destroy = callback;
-	frame->api_data = data;
 
 	return frame;
 }
 
+void frame_init(struct frame *frame, void (*callback)(void *), void *data)
+{
+	frame->api_destroy = callback;
+	frame->api_data = data;
+}
+
 void frame_destroy(struct frame *frame)
 {
-	struct frame *child, *tmp;
-	struct item *item, *itemp;
+	struct item *item, *tmp;
 
-	wl_list_for_each_safe(child, tmp, &frame->children, link)
-		frame_destroy(child);
+	if(frame->child)
+		frame_destroy(frame->child);
 
-	wl_list_for_each_safe(item, itemp, &frame->items, link)
+	wl_list_for_each_safe(item, tmp, &frame->items, link)
 		item->destroy(item);
 
 	event_destroy(frame->event);
@@ -777,20 +815,21 @@ void frame_destroy(struct frame *frame)
 		free(frame->theme);
 	}
 
-	if(!frame->parent)
+	if(frame->parent) {
+		frame->parent->child = NULL;
+	} else {
+		frame->menu->mainframe = NULL;
 		ms_surface_destroy(frame->role.main);
+	}
 	wl_surface_destroy(frame->surface);
 
-	wl_list_remove(&frame->link);
 	free(frame);
 }
 
 void menu_close(struct menu *menu)
 {
-	struct frame *child, *tmp;
-
-	wl_list_for_each_safe(child, tmp, &menu->top_frames, link)
-		frame_destroy(child);
+	if(menu->mainframe)
+		frame_destroy(menu->mainframe);
 }
 
 struct theme *menu_get_theme(struct menu *menu)
@@ -812,7 +851,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
 	menu->sc = sc;
 	menu->ms = ms;
 	menu->pool = pool;
-	wl_list_init(&menu->top_frames);
+	menu->pfocus = NULL;
 
 	menu->theme = malloc(sizeof(struct theme));
 	if(menu->theme == NULL)
@@ -823,10 +862,15 @@ struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
 	if(menu->theme->font_family == NULL)
 		goto err_font;
 
+	menu->mainframe = frame_create(menu, NULL);
+	if(menu->mainframe == NULL)
+		goto err;
+
 	switch(lang) {
 	case MS_MENU_FRONTEND_LUA:
 #ifdef API_LUA
-		menu->api_destroy = api_init(menu, file, &menu->api_context);
+		menu->api_destroy = api_init(menu, menu->mainframe, file,
+					     &menu->api_context);
 		if(!menu->api_destroy)
 			goto err;
 		break;
@@ -847,6 +891,8 @@ struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
 	return menu;
 
 err:
+	if(menu->mainframe)
+		frame_destroy(menu->mainframe);
 	free(menu->theme->font_family);
 err_font:
 	free(menu->theme);
@@ -877,8 +923,8 @@ void menu_event_pointer_enter(struct wl_surface *surf)
 	if(frame == NULL)
 		return;
 
-	frame->pfocus = 1;
-	event_fire(frame->event, EVENT_ENTER);
+	frame->menu->pfocus = frame;
+	event_fire(frame->event, EVENT_ENTER, NULL);
 }
 
 void menu_event_pointer_leave(struct wl_surface *surf)
@@ -888,5 +934,49 @@ void menu_event_pointer_leave(struct wl_surface *surf)
 	if(frame == NULL)
 		return;
 
-	frame->pfocus = 0;
+	frame->menu->pfocus->pfocus = NULL;
+	frame->menu->pfocus = NULL;
+}
+
+void menu_event_pointer_motion(struct menu *menu, wl_fixed_t fx, wl_fixed_t fy)
+{
+	if(menu->pfocus) {
+		struct frame *frame = menu->pfocus;
+		int y = wl_fixed_to_int(fy);
+		int offset = 0;
+		struct item *i;
+
+		wl_list_for_each(i, &frame->items, link) {
+			offset += i->height;
+			if(offset > y) {
+				if(frame->pfocus != i) {
+					frame->pfocus = i;
+					frame->enter_time = 0;
+				}
+				return;
+			}
+		}
+	}
+}
+
+static void run_event(enum event_type ev, struct callback *cb, void *event)
+{
+	switch(ev) {
+	case EVENT_OPEN:
+	{
+		struct ev_open *ev_open = event;
+		struct frame *parent = ev_open->frame;
+		struct item *item = ev_open->item;
+		struct frame *frame = frame_create(parent->menu, parent);
+		int x = frame_width(parent);
+		int y = item_offset(item);
+
+		parent->child = frame;
+		parent->open = item;
+		wl_subsurface_set_position(frame->role.sub, x, y);
+		ev_open->frame = frame;
+	}
+	default:
+		cb->callback(cb->data, event);
+	}
 }

@@ -27,6 +27,8 @@ struct cb_data {
 
 static char const * const event_array[] = {
 	"none",
+	"open",
+	"close",
 	"enter",
 	"leave",
 	"click",
@@ -128,7 +130,6 @@ err:
 	luaL_error(ls, "attempt to call method '%s' "
 		   "on invalid object", f);
 	return NULL; /* silence warning */
-
 }
 
 static void destroy_userdata(void *data)
@@ -138,7 +139,44 @@ static void destroy_userdata(void *data)
 	le_data->valid = 0;
 }
 
-static void fire_event(void *data)
+static struct userdata *create_userdata(lua_State *ls, void *content,
+					char const *mt)
+{
+	struct userdata *data;
+
+	data = lua_newuserdata(ls, sizeof(*data));
+	luaL_setmetatable(ls, mt);
+
+	data->valid = 1;
+	data->data = content;
+
+	return data;
+}
+
+static void fire_open(void *cb_data, void *event)
+{
+	struct cb_data *cb = cb_data;
+	struct frame *frame = ((struct ev_open *)event)->frame;
+	struct userdata *data = create_userdata(cb->ls, frame, META_MENU);
+
+	frame_init(frame, destroy_userdata, data);
+
+	lua_rawgeti(cb->ls, LUA_REGISTRYINDEX, cb->f);
+	lua_pushvalue(cb->ls, -2);
+
+	if(lua_pcall(cb->ls, 1, 0, 0))
+		throw_error(cb->ls);
+
+	if(data->valid)
+		frame_show(data->data);
+	lua_pop(cb->ls, 1);
+}
+
+static void fire_close(void *data, void *event)
+{
+}
+
+static void fire_enter(void *data, void *event)
 {
 	struct cb_data *cb = data;
 
@@ -146,6 +184,23 @@ static void fire_event(void *data)
 	if(lua_pcall(cb->ls, 0, 0, 0))
 		throw_error(cb->ls);
 }
+
+static void fire_leave(void *data, void *event)
+{
+}
+
+static void fire_click(void *data, void *event)
+{
+}
+
+static void (*select_cb[])(void *, void *) = {
+	NULL,
+	fire_open,
+	fire_close,
+	fire_enter,
+	fire_leave,
+	fire_click,
+};
 
 static void destroy_event(void *data)
 {
@@ -260,18 +315,9 @@ static int api_item_on(lua_State *ls)
 
 	item_register_event(item,
 			    ev,
-			    fire_event,
+			    select_cb[ev],
 			    destroy_event,
 			    cb_data);
-	return 0;
-}
-
-static int api_menu_show(lua_State *ls)
-{
-	struct frame *frame = getself(ls, META_MENU, "show");
-
-	frame_show(frame);
-
 	return 0;
 }
 
@@ -283,34 +329,9 @@ static int api_menu_close(lua_State *ls)
 	return 0;
 }
 
-static int api_menu_submenu(lua_State *ls)
-{
-	struct userdata *data;
-	struct menu *menu = getmenu(ls);
-	struct frame *frame = getself(ls, META_MENU, "submenu");
-
-	data = lua_newuserdata(ls, sizeof(*data));
-	luaL_setmetatable(ls, META_MENU);
-
-	data->valid = 1;
-	data->data = frame_create(menu, frame, destroy_userdata, data);
-
-	return 1;
-}
-
 static int api_menu_set_theme(lua_State *ls)
 {
 
-	return 0;
-}
-
-static int api_menu_move_to(lua_State *ls)
-{
-	struct frame *frame = getself(ls, META_MENU, "move_to");
-	lua_Integer x = luaL_checkinteger(ls, 2);
-	lua_Integer y = luaL_checkinteger(ls, 3);
-
-	frame_move(frame, x, y);
 	return 0;
 }
 
@@ -361,7 +382,7 @@ static int api_menu_on(lua_State *ls)
 
 	frame_register_event(frame,
 			     ev,
-			     fire_event,
+			     select_cb[ev],
 			     destroy_event,
 			     cb_data);
 	return 0;
@@ -374,20 +395,6 @@ static int api_menu_off(lua_State *ls)
 
 	frame_remove_events(frame, ev);
 	return 0;
-}
-
-static int api_base_spawn(lua_State *ls)
-{
-	struct userdata *data;
-	struct menu *menu = getmenu(ls);
-
-	data = lua_newuserdata(ls, sizeof(*data));
-	luaL_setmetatable(ls, META_MENU);
-
-	data->valid = 1;
-	data->data = frame_create(menu, NULL, destroy_userdata, data);
-
-	return 1;
 }
 
 static int api_base_close(lua_State *ls)
@@ -413,18 +420,14 @@ static int api_base_set_theme(lua_State *ls)
 }
 
 static const luaL_Reg api_base[] = {
-	{ "spawn_menu", api_base_spawn },
 	{ "close", api_base_close },
 	{ "set_theme", api_base_set_theme },
 	{ 0, 0 }
 };
 
 static const luaL_Reg api_menu[] = {
-	{ "show", api_menu_show },
 	{ "close", api_menu_close },
-	{ "submenu", api_menu_submenu },
 	{ "set_theme", api_menu_set_theme },
-	{ "move_to", api_menu_move_to },
 	{ "add_text", api_menu_add_text },
 	{ "add_bar", api_menu_add_bar },
 	{ "on", api_menu_on },
@@ -477,9 +480,12 @@ static void api_finish(void *context)
 	lua_close(context);
 }
 
-void *api_init(struct menu *menu, char const *file, void **context)
+void *api_init(struct menu *menu, struct frame *frame, char const *file,
+	       void **context)
 {
+	struct userdata *data;
 	lua_State *ls = luaL_newstate();
+
 	luaL_openlibs(ls);
 
 	lua_pushlightuserdata(ls, menu);
@@ -494,9 +500,17 @@ void *api_init(struct menu *menu, char const *file, void **context)
 	if(lua_pcall(ls, 0, 0, 0))
 		goto err;
 
+	data = create_userdata(ls, frame, META_MENU);
+	frame_init(data->data, destroy_userdata, data);
 	lua_getglobal(ls, "main");
-	if(lua_pcall(ls, 0, 0, 0))
+	lua_pushvalue(ls, -2); /* Stop gc */
+
+	if(lua_pcall(ls, 1, 0, 0))
 		goto err;
+
+	if(data->valid)
+		frame_show(data->data);
+	lua_pop(ls, 1);
 
 	*context = ls;
 	return &api_finish;

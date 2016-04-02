@@ -10,6 +10,8 @@ void menu_destroy(struct menu *menu);
 
 void menu_event_pointer_enter(struct wl_surface *surf);
 void menu_event_pointer_leave(struct wl_surface *surf);
+void menu_event_pointer_motion(struct menu *menu, wl_fixed_t fx,
+			       wl_fixed_t fy);
 
 #endif
 

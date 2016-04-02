@@ -298,6 +298,10 @@ static void pointer_leave(void *data, struct wl_pointer *p, uint32_t serial,
 static void pointer_motion(void *data, struct wl_pointer *p, uint32_t time,
 			   wl_fixed_t x, wl_fixed_t y)
 {
+	struct display *d = data;
+
+	if(d->menu)
+		menu_event_pointer_motion(d->menu, x, y);
 }
 
 static void pointer_button(void *data, struct wl_pointer *p, uint32_t serial,

@@ -4,9 +4,16 @@
 
 enum event_type {
 	EVENT_NONE,
+	EVENT_OPEN,
+	EVENT_CLOSE,
 	EVENT_ENTER,
 	EVENT_LEAVE,
 	EVENT_CLICK
+};
+
+struct ev_open {
+	struct item *item;
+	struct frame *frame;
 };
 
 enum item_align {
@@ -17,6 +24,7 @@ enum item_align {
 };
 
 struct theme {
+	unsigned open_delay;
 	uint32_t color;
 	uint32_t color_from;
 	uint32_t color_to;
@@ -41,22 +49,22 @@ struct item;
 void menu_close(struct menu *);
 struct theme *menu_get_theme(struct menu *menu);
 
-struct frame *frame_create(struct menu *menu, struct frame *parent,
-			   void (*)(void *), void *);
+void frame_init(struct frame *frame, void (*callback)(void *), void *data);
+int frame_show(struct frame *);
 void frame_destroy(struct frame *frame);
 void frame_register_event(struct frame *,
 			  enum event_type,
-			  void (*)(void *),
+			  void (*)(void *, void *),
 			  void (*)(void *),
 			  void *);
 void frame_remove_events(struct frame *frame, enum event_type ev);
-void frame_move(struct frame *frame, int32_t x, int32_t y);
+int frame_width(struct frame *frame);
 struct theme *frame_get_theme(struct frame *frame);
-int frame_show(struct frame *);
 
+unsigned item_offset(struct item *item);
 void item_register_event(struct item *,
 			 enum event_type,
-			 void (*)(void *),
+			 void (*)(void *, void *),
 			 void (*)(void *),
 			 void *);
 
@@ -73,7 +81,7 @@ void item_text_set_text(struct item_text *item, const char *text);
 void throw(char const *e);
 
 #ifdef API_LUA
-void *api_init(struct menu *, char const *, void **);
+void *api_init(struct menu *, struct frame *, char const *, void **);
 #endif
 
 #endif
