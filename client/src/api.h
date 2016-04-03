@@ -46,7 +46,6 @@ struct theme {
 struct menu;
 struct item;
 
-void menu_close(struct menu *);
 struct theme *menu_get_theme(struct menu *menu);
 
 void frame_init(struct frame *frame, void (*callback)(void *), void *data);

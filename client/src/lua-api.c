@@ -397,14 +397,6 @@ static int api_menu_off(lua_State *ls)
 	return 0;
 }
 
-static int api_base_close(lua_State *ls)
-{
-	struct menu *menu = getmenu(ls);
-
-	menu_close(menu);
-	return 0;
-}
-
 static int api_base_set_theme(lua_State *ls)
 {
 	struct menu *menu = getmenu(ls);
@@ -420,7 +412,6 @@ static int api_base_set_theme(lua_State *ls)
 }
 
 static const luaL_Reg api_base[] = {
-	{ "close", api_base_close },
 	{ "set_theme", api_base_set_theme },
 	{ 0, 0 }
 };
@@ -518,7 +509,6 @@ void *api_init(struct menu *menu, struct frame *frame, char const *file,
 err:
 	throw_error(ls);
 
-	menu_close(menu);
 	lua_close(ls);
 	return NULL;
 }

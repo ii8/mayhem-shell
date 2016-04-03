@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <time.h>
 
 #include <cairo.h>
 #include <wayland-client-core.h>
@@ -67,7 +68,6 @@ struct buffer *buffer_create(struct pool *pool, int width, int height,
 			goto derp;
 		}
 	}
-
 
 	if(wl_list_empty(&pool->buffers)) {
 		buffer = zalloc(sizeof *buffer);
@@ -163,7 +163,6 @@ skip:
 
 struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 {
-	static unsigned seed = 0;
 	struct pool *pool;
 	int max = 100;
 	int len;
@@ -172,7 +171,7 @@ struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
 	if(!pool)
 		return NULL;
 
-	srand(++seed);
+	srand(time(NULL));
 	len = strlen(name);
 	pool->name = malloc(len + 8);
 	if(!pool->name)

@@ -826,12 +826,6 @@ void frame_destroy(struct frame *frame)
 	free(frame);
 }
 
-void menu_close(struct menu *menu)
-{
-	if(menu->mainframe)
-		frame_destroy(menu->mainframe);
-}
-
 struct theme *menu_get_theme(struct menu *menu)
 {
 	return menu->theme;
@@ -909,7 +903,8 @@ void throw(char const *e)
 
 void menu_destroy(struct menu *menu)
 {
-	menu_close(menu);
+	if(menu->mainframe)
+		frame_destroy(menu->mainframe);
 	menu->api_destroy(menu->api_context);
 	free(menu->theme->font_family);
 	free(menu->theme);

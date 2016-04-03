@@ -4583,6 +4583,7 @@ static void map(struct mayhem_shell *shell, struct shell_surface *shsurf,
 		} else if (shsurf->state.maximized) {
 			set_maximized_position(shell, shsurf);
 		} else if (!shsurf->state.relative) {
+	case SHELL_SURFACE_MENU:
 			weston_view_set_initial_position(shsurf->view, shell);
 		}
 		break;
@@ -4590,7 +4591,6 @@ static void map(struct mayhem_shell *shell, struct shell_surface *shsurf,
 		if (shell_map_popup(shsurf) != 0)
 			return;
 		break;
-	case SHELL_SURFACE_MENU:
 	case SHELL_SURFACE_NONE:
 		weston_view_set_position(shsurf->view,
 					 shsurf->view->geometry.x + sx,
@@ -5382,7 +5382,7 @@ static void shell_destroy(struct wl_listener *listener, void *data)
 	if (shell->child.client) {
 		/* disable respawn */
 		wl_list_remove(&shell->child.client_destroy_listener.link);
-		wl_client_destroy(shell->child.client);
+		//wl_client_destroy(shell->child.client);
 	}
 
 	wl_list_remove(&shell->idle_listener.link);
