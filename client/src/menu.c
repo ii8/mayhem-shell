@@ -911,6 +911,11 @@ void menu_destroy(struct menu *menu)
 	free(menu);
 }
 
+int menu_focused(struct menu *menu)
+{
+	return menu->pfocus ? 1 : 0;
+}
+
 void menu_event_pointer_enter(struct wl_surface *surf)
 {
 	struct frame *frame = wl_surface_get_user_data(surf);

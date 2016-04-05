@@ -3720,9 +3720,6 @@ static void ms_setbg(struct wl_client *client,
 	weston_surface_set_label_func(surface, background_get_label);
 	surface->output = wl_resource_get_user_data(output_resource);
 	view->output = surface->output;
-
-	//TODO REMOVE
-	//ms_menu_send_spawn(shell->child.mayhem_shell, 0, 0);
 }
 
 static void ms_setgrab(struct wl_client *client, struct wl_resource *resource,

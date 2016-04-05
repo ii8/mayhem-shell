@@ -46,6 +46,7 @@ struct output {
 	uint32_t id;
 	struct wl_list link;
 
+	int width, height;
 	struct buffer *buffer;
 	struct wl_surface *surf;
 	char *file;
@@ -151,6 +152,12 @@ static void output_handle_mode(void *data,
 			       int height,
 			       int refresh)
 {
+	struct output *o = data;
+
+	if(flags & WL_OUTPUT_MODE_CURRENT) {
+		o->width = width;
+		o->height = height;
+	}
 }
 
 static void output_handle_done(void *data, struct wl_output *wl_output)
@@ -172,32 +179,62 @@ static const struct wl_output_listener output_listener = {
 static void output_draw_bg(struct output* o)
 {
 	cairo_t *cr;
-	cairo_pattern_t *pattern;
-	cairo_surface_t *surface;
+	cairo_surface_t *img, *surface;
+	int w, h;
 	void *data;
 
-	surface = cairo_image_surface_create_from_png(o->file);
+	FILE *f;
+	char m[4];
+	unsigned png = 0x474e5089;
+
+	f = fopen(o->file, "r");
+	if(!f) {
+		perror("while trying to open bg file");
+		return;
+	}
+	fread(&m, 1, 4, f);
+	fclose(f);
+	if(memcmp(&m, &png, 4)) {
+		fprintf(stderr, "Currently only png images are supported\n");
+		return;
+	}
+
+	surface = cairo_image_surface_create(CAIRO_FORMAT_RGB24,
+					     o->width, o->height);
 	cr = cairo_create(surface);
-	pattern = cairo_pattern_create_for_surface(surface);
-	cairo_set_source(cr, pattern);
-	cairo_pattern_destroy(pattern);
+
+	img = cairo_image_surface_create_from_png(o->file);
+	w = cairo_image_surface_get_width(img);
+	h = cairo_image_surface_get_height(img);
+
+	cairo_translate(cr, (o->width - w) / 2, (o->height - h) / 2);
+	cairo_set_source_surface(cr, img, 0, 0);
 	cairo_paint(cr);
+
 	cairo_surface_flush(surface);
 	data = cairo_image_surface_get_data(surface);
 	memcpy(o->buffer->addr, data, o->buffer->size);
+
 	cairo_surface_destroy(surface);
+	cairo_surface_destroy(img);
 	cairo_destroy(cr);
 
 	wl_surface_attach(o->surf, o->buffer->buffer, 0, 0);
-	wl_surface_damage_buffer(o->surf, 0, 0, 1920, 1080);
+	wl_surface_damage_buffer(o->surf, 0, 0, o->width, o->height);
 	wl_surface_commit(o->surf);
 }
 
 static int output_init(struct output *o, struct display *d)
 {
-	char *file = "/home/murray/.bg/Anime/default.png";
+	//char *file = "/home/murray/.bg/Anime/default.png";
+	char *file = "/home/murray/Downloads/g/genos.png";
 
-	o->buffer = buffer_create(d->pool, 1920, 1080,
+	if(!o->width || !o->height) {
+		fprintf(stderr, "Got no mode for output");
+		goto err;
+	}
+
+	o->buffer = buffer_create(d->pool, o->width, o->height,
 				  WL_SHM_FORMAT_XRGB8888);
 	if(o->buffer == NULL)
 		goto err;
@@ -283,7 +320,10 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t serial,
 
 	set_cursor(d, d->cursors[CURSOR_LEFT_PTR], serial);
 
-	menu_event_pointer_enter(surf);
+	if(d->menu) {
+		menu_event_pointer_enter(surf);
+		menu_event_pointer_motion(d->menu, x, y);
+	}
 }
 
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t serial,
@@ -307,6 +347,12 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t time,
 static void pointer_button(void *data, struct wl_pointer *p, uint32_t serial,
 			   uint32_t time, uint32_t button, uint32_t state)
 {
+	struct display *d = data;
+
+	if(d->menu && !menu_focused(d->menu)) {
+		menu_destroy(d->menu);
+		d->menu = NULL;
+	}
 }
 
 static void pointer_axis(void *data, struct wl_pointer *p, uint32_t time,
