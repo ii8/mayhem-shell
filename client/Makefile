@@ -1,12 +1,13 @@
 
 include ../config.mk
 
-CFLAGS+=-I/usr/include/cairo -I../protocol
-LDFLAGS=-lwayland-client -lwayland-cursor -lcairo -lrt
+CFLAGS+=-I../protocol `pkg-config --cflags cairo freetype2`
+LDFLAGS=-lrt `pkg-config --libs wayland-client wayland-cursor cairo freetype2 fontconfig`
 SOURCES=\
 	src/client.c\
 	src/menu.c\
 	src/pool.c\
+	src/font.c\
 	../protocol/xdg-shell.c\
 	../protocol/mayhem.c
 

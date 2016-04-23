@@ -12,6 +12,7 @@
 #include "pool.h"
 #include "menu.h"
 #include "api.h"
+#include "font.h"
 #include "util.h"
 
 #define PI 3.141592654
@@ -241,6 +242,7 @@ enum item_type {
 struct item {
 	struct wl_list link;
 	struct frame *parent;
+	struct theme *theme;
 	enum item_type type; //might not need this
 	void (*draw)(struct item *, cairo_t *, int);
 	void (*destroy)(struct item *);
@@ -257,17 +259,33 @@ static const struct theme default_theme = {
 	.color_from = 0x14395EFF,
 	.color_to = 0x14537DFF,
 	.color_item = 0x00000000,
-	.font_family = "serif",
-	//.font_slant = CAIRO_FONT_SLANT_NORMAL,
-	//.font_weight = CAIRO_FONT_WEIGHT_NORMAL,
+	.font = NULL,
 	.frame_padding = { 0, 0, 0, 0 },
 	.item_padding = { 0, 0, 0, 0 },
 	.align = ITEM_ALIGN_LEFT,
 	.radius = 10,
 	.min_width = 100,
 	.max_width = 400,
-	.text_size = 14
 };
+
+static struct theme *theme_replicate(struct theme const *theme)
+{
+	struct theme *dup = xmalloc(sizeof *theme);
+	memcpy(dup, theme, sizeof *theme);
+
+	if(!dup->font)
+		dup->font = font_create("monospace", 16);
+	else
+		font_ref(dup->font);
+
+	return dup;
+}
+
+static void theme_destroy(struct theme *theme)
+{
+	font_unref(theme->font);
+	free(theme);
+}
 
 static void decimal_color(uint32_t color, double *r, double *g, double *b,
 			  double *a)
@@ -373,7 +391,6 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 	cairo_surface_t *surface;
 	cairo_t *cr;
 	unsigned int stride;
-	int offset;
 
 	try_open(frame, time);
 
@@ -397,18 +414,16 @@ static void redraw(void *data, struct wl_callback *callback, uint32_t time)
 
 	draw_bg(cr, frame);
 	cairo_set_source_rgba(cr, 1, 1, 1, 1.0);
-	offset = 0;
 
 	wl_list_for_each(item, &frame->items, link) {
+		cairo_translate(cr, 0, item->height);
 		//cairo_save(cr);
-		cairo_move_to(cr, 0, offset);
 		item->draw(item, cr, frame->width);
 		//cairo_restore(cr);
-		offset += item->height;
 	}
 
 	if(cairo_status(cr) != CAIRO_STATUS_SUCCESS)
-		printf("%s\n", cairo_status_to_string(cairo_status(cr)));
+		printf("cairo: %s\n", cairo_status_to_string(cairo_status(cr)));
 
 	cairo_destroy(cr);
 
@@ -457,10 +472,20 @@ void item_register_event(struct item *item,
 	event_register(&item->event, ev, callback);
 }
 
+struct theme *item_get_theme(struct item *item)
+{
+	if(item->theme != item->parent->theme)
+		return item->theme;
+
+	item->theme = theme_replicate(item->parent->theme);
+	return item->theme;
+}
+
 static void item_init(struct item *item, struct frame *parent,
 		      void (*api_destroy)(void *), void *api_data)
 {
 	item->parent = parent;
+	item->theme = parent->theme;
 
 	item->api_destroy = api_destroy;
 	item->api_data = api_data;
@@ -474,90 +499,57 @@ static void item_init(struct item *item, struct frame *parent,
 	parent->height += item->height;
 }
 
-/* Text item */
-struct item_text_theme {
-	char *font;
-	uint32_t color;
-	int size;
-	//int padding[4];
-	//struct border*
-};
+static void item_destroy(struct item *item)
+{
+	if(item->api_destroy)
+		item->api_destroy(item->api_data);
 
+	if(item->theme != item->parent->theme)
+		theme_destroy(item->theme);
+
+	wl_list_remove(&item->link);
+	free(item);
+}
+
+/* Text item */
 struct item_text {
 	struct item base;
-	struct item_text_theme *theme;
 	int width;
-	char *text;
+	struct text *text;
 };
-
-struct item_text_theme *item_text_get_theme(struct item_text *item)
-{
-	if(item->theme == NULL) {
-		struct theme *p = item->base.parent->theme;
-
-		item->theme = malloc(sizeof(struct item_text_theme));
-		if(item->theme == NULL)
-			return NULL;
-
-		item->theme->font = p->font_family;
-		item->theme->color = p->color;
-		item->theme->size = p->text_size;
-	}
-
-	return item->theme;
-}
 
 void item_text_set_text(struct item_text *item, const char *text)
 {
-	free(item->text);
-	item->text = strdup(text);
+	text_destroy(item->text);
+	item->text = text_create(item->base.theme->font, text);
 	item->base.parent->dirty = 1;
 }
 
 static void item_text_draw(struct item *item, cairo_t *cr, int width)
 {
 	struct item_text *text = (struct item_text *) item;
+	double r, g, b, a;
 
-	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL,
-			       CAIRO_FONT_WEIGHT_BOLD);
-	cairo_set_font_size(cr, 44);
+	decimal_color(item->theme->color, &r, &g, &b, &a);
+	cairo_set_source_rgba(cr, r, g, b, a);
 
-	//cairo_move_to(cr,0,0);
-	cairo_rel_move_to(cr, 0, item->height);
-	cairo_show_text(cr, text->text);
-
-	//cairo_text_path(cr, text->text);
-	//cairo_stroke(cr);
+	text_draw(text->text, cr);
 }
 
 static void item_text_destroy(struct item *item)
 {
 	struct item_text *item_text = (struct item_text *)item;
 
-	if(item->api_destroy)
-		item->api_destroy(item->api_data);
-
-	if(item_text->theme != NULL) {
-		free(item_text->theme->font);
-		free(item_text->theme);
-	}
-
-	free(item_text->text);
-
-	wl_list_remove(&item->link);
-	free(item);
+	text_destroy(item_text->text);
+	item_destroy(item);
 }
 
 struct item_text *item_text_create(struct frame *parent,
 				   void (*callback)(void *),
 				   void *data,
-				   const char* text)
+				   const char *text)
 {
 	struct item_text *item;
-	cairo_t *cr;
-	cairo_surface_t *cs;
-	cairo_font_extents_t font_ext;
-	cairo_text_extents_t text_ext;
 
 	item = zalloc(sizeof(struct item_text));
 	if(!item)
@@ -567,19 +559,8 @@ struct item_text *item_text_create(struct frame *parent,
 	item->base.draw = item_text_draw;
 	item->base.destroy = item_text_destroy;
 
-	cs = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 0, 0);
-	cr = cairo_create(cs);
-	cairo_select_font_face(cr, "serif", CAIRO_FONT_SLANT_NORMAL,
-			       CAIRO_FONT_WEIGHT_BOLD);
-	cairo_set_font_size(cr, 44);
-	cairo_font_extents(cr, &font_ext);
-	cairo_text_extents(cr, text, &text_ext);
-	cairo_surface_destroy(cs);
-	cairo_destroy(cr);
-
-	item->base.height = font_ext.ascent + font_ext.descent;
-	item->width = text_ext.width;
-	item->text = strdup(text);
+	item->text = text_create(parent->theme->font, text);
+	text_extents(item->text, &item->width, &item->base.height);
 
 	if(!parent->callback) {
 		if(item->width > parent->width)
@@ -594,39 +575,10 @@ struct item_text *item_text_create(struct frame *parent,
 }
 
 /* Bar item */
-struct item_bar_theme {
-	uint32_t color;
-	//int padding[4]; /* top, right, bot, left */
-	enum item_align align;
-	/*
-	enum item_bar_style {
-		ITEM_BAR_STYLE_DOTTED = 0x01,
-		ITEM_BAR_STYLE_ROUND = 0x02
-	} style;
-	*/
-};
-
 struct item_bar {
 	struct item base;
-	struct item_bar_theme *theme;
 	double fill;
 };
-
-struct item_bar_theme *item_bar_get_theme(struct item_bar *item)
-{
-	if(item->theme == NULL) {
-		struct theme *p = item->base.parent->theme;
-
-		item->theme = malloc(sizeof(struct item_bar_theme));
-		if(item->theme == NULL)
-			return NULL;
-
-		item->theme->color = p->color;
-		item->theme->align = p->align;
-	}
-
-	return item->theme;
-}
 
 void item_bar_set_fill(struct item_bar *item, double fill)
 {
@@ -637,29 +589,18 @@ void item_bar_set_fill(struct item_bar *item, double fill)
 static void item_bar_draw(struct item *item, cairo_t *cr, int width)
 {
 	struct item_bar *bar = (struct item_bar *)item;
+	double r, g, b, a;
+
+	decimal_color(item->theme->color, &r, &g, &b, &a);
 
 	cairo_set_line_width(cr, item->height);
-	cairo_set_source_rgba(cr, 0.4, 0.5, 0.5, 1.0);
+	cairo_set_source_rgba(cr, r, g, b, a);
 
 	//cairo_rel_move_to(cr, 10, 10);//TODO padding??
 
-	cairo_rel_move_to(cr, 0, item->height / 2);
+	cairo_move_to(cr, 0, item->height / 2);
 	cairo_rel_line_to(cr, width * bar->fill, 0);
 	cairo_stroke(cr);
-}
-
-static void item_bar_destroy(struct item *item)
-{
-	struct item_bar *i = (struct item_bar*)item;
-
-	if(item->api_destroy)
-		item->api_destroy(item->api_data);
-
-	if(i->theme != NULL)
-		free(i->theme);
-
-	wl_list_remove(&item->link);
-	free(item);
 }
 
 struct item_bar *item_bar_create(struct frame *parent,
@@ -667,15 +608,16 @@ struct item_bar *item_bar_create(struct frame *parent,
 				 void *data,
 				 int height)
 {
-	struct item_bar * item;
+	struct item_bar *item;
 
-	item = calloc(1, sizeof(struct item_bar));
+	item = zalloc(sizeof *item);
 	if(!item)
 		return NULL;
 
 	item->base.type = ITEM_BAR;
 	item->base.draw = item_bar_draw;
-	item->base.destroy = item_bar_destroy;
+	item->base.destroy = item_destroy;
+
 	item->base.height = height;
 
 	item->fill = 1;
@@ -719,11 +661,7 @@ struct theme *frame_get_theme(struct frame *frame)
 	if(frame->theme != frame->menu->theme)
 		return frame->theme;
 
-	frame->theme = xmalloc(sizeof(struct theme));
-	memcpy(frame->theme, frame->menu->theme, sizeof *frame->theme);
-
-	frame->theme->font_family = xstrdup(frame->menu->theme->font_family);
-
+	frame->theme = theme_replicate(frame->menu->theme);
 	return frame->theme;
 }
 
@@ -810,10 +748,8 @@ void frame_destroy(struct frame *frame)
 		buffer_destroy(frame->buffers[0]);
 	}
 
-	if(frame->theme != frame->menu->theme) {
-		free(frame->theme->font_family);
-		free(frame->theme);
-	}
+	if(frame->theme != frame->menu->theme)
+		theme_destroy(frame->theme);
 
 	if(frame->parent) {
 		frame->parent->child = NULL;
@@ -847,14 +783,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
 	menu->pool = pool;
 	menu->pfocus = NULL;
 
-	menu->theme = malloc(sizeof(struct theme));
-	if(menu->theme == NULL)
-		goto err_theme;
-	memcpy(menu->theme, &default_theme, sizeof *menu->theme);
-
-	menu->theme->font_family = strdup(default_theme.font_family);
-	if(menu->theme->font_family == NULL)
-		goto err_font;
+	menu->theme = theme_replicate(&default_theme);
 
 	menu->mainframe = frame_create(menu, NULL);
 	if(menu->mainframe == NULL)
@@ -887,10 +816,7 @@ struct menu *menu_create(struct wl_compositor *ec, struct wl_subcompositor *sc,
 err:
 	if(menu->mainframe)
 		frame_destroy(menu->mainframe);
-	free(menu->theme->font_family);
-err_font:
-	free(menu->theme);
-err_theme:
+	theme_destroy(menu->theme);
 	free(menu);
 err_menu:
 	return NULL;
@@ -906,8 +832,7 @@ void menu_destroy(struct menu *menu)
 	if(menu->mainframe)
 		frame_destroy(menu->mainframe);
 	menu->api_destroy(menu->api_context);
-	free(menu->theme->font_family);
-	free(menu->theme);
+	theme_destroy(menu->theme);
 	free(menu);
 }
 

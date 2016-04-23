@@ -8,10 +8,12 @@
 #include <cairo.h>
 #include <wayland-client-core.h>
 #include <wayland-cursor.h>
+
 #include "mayhem-client.h"
 #include "pool.h"
 #include "menu.h"
 #include "cursors.h"
+#include "font.h"
 #include "util.h"
 
 //#include <sys/types.h>
@@ -619,6 +621,8 @@ int main(int argc, char *argv[])
 	int ret = 0;
 
 	pool_setup();
+	if(font_setup() < 0)
+		return EXIT_FAILURE;
 
 	display = display_create();
 	if(!display)
@@ -635,6 +639,7 @@ int main(int argc, char *argv[])
 	printf("Quit\n");
 
 	display_destroy(display);
+	font_finish();
 
 	return EXIT_SUCCESS;
 }

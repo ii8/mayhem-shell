@@ -1,7 +1,7 @@
 
 include config.mk
 
-override CFLAGS+=-fpic -I/usr/include/pixman-1 -Iprotocol
+override CFLAGS+=-fpic -Iprotocol `pkg-config --cflags pixman-1`
 LDFLAGS=-shared
 TARGET=mayhem-shell.so
 GENFILES=\

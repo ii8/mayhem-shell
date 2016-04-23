@@ -9,6 +9,7 @@
 #include <lauxlib.h>
 
 #include "api.h"
+#include "font.h"
 
 #define MODULE_NAME "mayhem"
 #define META_MENU MODULE_NAME "_menu_mt"
@@ -268,8 +269,10 @@ static void parse_color(lua_State *ls, char *name, uint32_t *dest)
 	case LUA_TNIL:
 		break;
 	default:
+		lua_pop(ls, 1);
 		luaL_error(ls, "not a valid color");
 	}
+	lua_pop(ls, 1);
 }
 
 static int api_text_set_text(lua_State *ls)
@@ -401,12 +404,35 @@ static int api_base_set_theme(lua_State *ls)
 {
 	struct menu *menu = getmenu(ls);
 	struct theme* theme = menu_get_theme(menu);
+	int type;
+	char const *font_family;
+	int font_size;
 
 	luaL_checktype(ls, 1, LUA_TTABLE);
 
 	parse_color(ls, "color", &theme->color);
 	parse_color(ls, "bg_color_from", &theme->color_from);
 	parse_color(ls, "bg_color_to", &theme->color_to);
+
+	type = lua_getfield(ls, 1, "font_family");
+	if(type == LUA_TNIL) {
+		lua_pop(ls, 1);
+		type = lua_getfield(ls, 1, "font");
+	}
+	if(type == LUA_TSTRING)
+		font_family = lua_tostring(ls, -1);
+
+	lua_getfield(ls, 1, "font_size");
+	font_size = lua_tonumber(ls, -1);
+	lua_pop(ls, 1);
+
+	if(font_family || font_size) {
+		font_unref(theme->font);
+		theme->font = font_create(font_family, font_size);
+		if(!theme->font)
+			luaL_error(ls, "Failed to create font");
+	}
+	lua_pop(ls, 1); /* font_family */
 
 	return 0;
 }
