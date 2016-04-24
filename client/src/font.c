@@ -1,8 +1,59 @@
 #include <string.h>
 #include <assert.h>
 
+#include <wayland-util.h>
+
 #include "font.h"
 #include "util.h"
+
+#define REPLACEMENT_CHAR 0x0000fffd
+
+static uint32_t utf8_to_utf32(char const **utf8)
+{
+	static unsigned char const tail_len[256] = {
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+		2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+		3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0
+	};
+	unsigned char tail, c = *(*utf8)++;
+	uint32_t r = 0;
+
+	if(c < 0x80)
+		return c;
+
+	tail = tail_len[c];
+
+	/* middle of a character or tail too long */
+	if(!tail) {
+		while((c & 0xc0) == 0x80)
+			c = *(*utf8)++;
+		return REPLACEMENT_CHAR;
+	}
+
+	/* remove length specification bits */
+	r = c & 0x3f >> tail;
+
+	while(tail--) {
+		c = *(*utf8)++;
+		if((c & 0xc0) != 0x80)
+			return --(*utf8), REPLACEMENT_CHAR;
+		r = (r << 6) + (c & 0x3f);
+	}
+	return r;
+}
 
 static FT_Library ftlib;
 static FcConfig *config;
@@ -16,8 +67,8 @@ struct font {
 
 struct text {
 	struct font *font;
-	cairo_glyph_t *glyphs;
-	int num;
+	struct wl_array glyphs;
+	unsigned num;
 };
 
 struct font *font_create(char const *family, int size)
@@ -54,6 +105,9 @@ struct font *font_create(char const *family, int size)
 	if(!font)
 		goto err_match;
 
+	/* There is no need to manually select a cmap because freetype
+	 * will use unicode by default and even emulate unicode if it's
+	 * missing */
 	if(FT_New_Face(ftlib, (char *)file, index, &font->ftface))
 		goto err_ftface;
 
@@ -116,43 +170,45 @@ struct text *text_create(struct font *font, char const *str)
 	FT_GlyphSlot slot = font->ftface->glyph;
 	FT_UInt index;
 	double x = 0, y = 0;
-	int n;
+	uint32_t c;
+	cairo_glyph_t *p;
 
 	font_ref(font);
 	text->font = font;
-	text->num = strlen(str);
-	text->glyphs = xmalloc(text->num * sizeof(cairo_glyph_t));
+	text->num = 0;
+	wl_array_init(&text->glyphs);
 
-	for(n = 0; *str; str++, n++) {
-		index = FT_Get_Char_Index(font->ftface, *str);
+	while((c = utf8_to_utf32(&str))) {
+		index = FT_Get_Char_Index(font->ftface, c);
 
 		if(FT_Load_Glyph(font->ftface, index, FT_LOAD_DEFAULT)) {
 			fprintf(stderr, "FT_Load_Char error\n");
 			continue;
 		}
-		text->glyphs[n] = (cairo_glyph_t){ index, x, y };
+		p = wl_array_add(&text->glyphs, sizeof(cairo_glyph_t));
+		*p = (cairo_glyph_t){ index, x, y };
 
+		++text->num;
 		x += slot->advance.x >> 6;
 		y += slot->advance.y >> 6;
 	}
 
-	assert(text->num == n);
 	return text;
 }
 
 void text_destroy(struct text *text)
 {
 	font_unref(text->font);
-	free(text->glyphs);
+	wl_array_release(&text->glyphs);
 	free(text);
 }
 
-void text_extents(struct text *text, int *width, int *height)
+void text_extents(struct text *text, unsigned *width, unsigned *height)
 {
 	cairo_text_extents_t ext;
 
 	cairo_scaled_font_glyph_extents(text->font->font,
-					text->glyphs,
+					text->glyphs.data,
 					text->num,
 					&ext);
 	*width = ext.width;
@@ -162,7 +218,7 @@ void text_extents(struct text *text, int *width, int *height)
 void text_draw(struct text *text, cairo_t *cr)
 {
 	cairo_set_scaled_font(cr, text->font->font);
-	cairo_show_glyphs(cr, text->glyphs, text->num);
+	cairo_show_glyphs(cr, text->glyphs.data, text->num);
 }
 
 int font_setup(void)

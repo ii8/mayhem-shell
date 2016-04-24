@@ -197,7 +197,7 @@ static void event_destroy(struct event *root)
 }
 
 struct frame {
-	int width, height;
+	unsigned width, height;
 	struct wl_surface *surface;
 	union {
 		struct ms_surface *main;
@@ -249,7 +249,7 @@ struct item {
 	void (*api_destroy)(void *data);
 	void *api_data;
 	int api_focus;
-	int height;
+	unsigned height;
 	struct event *event;
 };
 
@@ -514,7 +514,7 @@ static void item_destroy(struct item *item)
 /* Text item */
 struct item_text {
 	struct item base;
-	int width;
+	unsigned width;
 	struct text *text;
 };
 

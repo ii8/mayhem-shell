@@ -34,7 +34,7 @@ struct theme {
 	int item_padding[4];
 	enum item_align align;
 	int radius; /* Negative value should curve in edges */
-	int min_width, max_width;
+	unsigned min_width, max_width;
 	//int item_height;
 	//border*
 };

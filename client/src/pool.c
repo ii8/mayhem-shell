@@ -26,14 +26,20 @@ struct pool {
 
 static long pagesize;
 
+struct buffer *_buffer_destroy(struct buffer* buffer);
+
 static void buffer_release(void *data, struct wl_buffer *buffer)
 {
 	struct buffer *buf = data;
 
 	assert(buf->flags & BUFFER_ACTIVE);
 	buf->flags &= ~BUFFER_BUSY;
-	if(buf->flags & BUFFER_KILL)
-		buffer_destroy(buf);
+	if(buf->flags & BUFFER_KILL) {
+		buf = _buffer_destroy(buf);
+		assert(buf);
+		if(buf->link.next == buf->link.prev)
+			free(buf);
+	}
 }
 
 static const struct wl_buffer_listener buffer_listener = {
@@ -116,26 +122,23 @@ derp:
 						   height, stride, format);
 	wl_buffer_add_listener(buffer->buffer, &buffer_listener, buffer);
 
-	printf("buffer_create: %p\n", buffer);
 	return buffer;
 }
 
-void buffer_destroy(struct buffer* buffer)
+struct buffer *_buffer_destroy(struct buffer* buffer)
 {
 	struct buffer *segment;
 
 	assert(buffer->flags & BUFFER_ACTIVE);
 	if(buffer->flags & BUFFER_BUSY) {
 		buffer->flags |= BUFFER_KILL;
-		return;
+		return NULL;
 	}
 
 	buffer->flags &= ~BUFFER_ACTIVE;
 	wl_buffer_destroy(buffer->buffer);
 	if(munmap(buffer->addr, buffer->size) < 0)
 		fprintf(stderr, "munmap error: %m\n");
-
-	printf("buffer_destroy: %p\n", buffer);
 
 	if(buffer->flags & BUFFER_LAST)
 		goto skip;
@@ -150,7 +153,7 @@ void buffer_destroy(struct buffer* buffer)
 
 skip:
 	if(buffer->flags & BUFFER_FIRST)
-		return;
+		return buffer;
 
 	segment = wl_container_of(buffer->link.next, segment, link);
 	if(~segment->flags & BUFFER_ACTIVE) {
@@ -158,7 +161,15 @@ skip:
 		segment->flags |= buffer->flags & BUFFER_LAST;
 		wl_list_remove(&buffer->link);
 		free(buffer);
+		return segment;
 	}
+
+	return buffer;
+}
+
+void buffer_destroy(struct buffer* buffer)
+{
+	_buffer_destroy(buffer);
 }
 
 struct pool *pool_create(struct wl_shm *shm, char *name, int initial_size)
@@ -215,11 +226,16 @@ void pool_destroy(struct pool* pool)
 			buffer_destroy(segment);
 	}
 
-	assert(pool->buffers.next == pool->buffers.prev);
-	assert(pool->buffers.next->prev == &pool->buffers);
+	/* at this point unreleased buffers may still exist.
+	 * they will all be destroyed as the server releases them */
 
-	segment = wl_container_of(pool->buffers.next, segment, link);
-	free(segment);
+	if(pool->buffers.next == pool->buffers.prev) {
+		segment = wl_container_of(pool->buffers.next, segment, link);
+		if(segment->flags & BUFFER_ACTIVE)
+			assert(segment->flags & BUFFER_BUSY);
+		else
+			free(segment);
+	}
 
 	wl_shm_pool_destroy(pool->shm_pool);
 	shm_unlink(pool->name);
